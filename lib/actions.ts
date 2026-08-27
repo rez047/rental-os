@@ -153,8 +153,10 @@ export async function getSignedUrl(path: string) {
   return data.signedUrl;
 }
 
-// NEW: upload lease media (move-in photos/videos) and return storage path
-export async function uploadLeaseMedia(file: File, folder: string) {
+// NEW: upload lease media via FormData (File objects must travel inside FormData)
+export async function uploadLeaseMedia(formData: FormData) {
+  const file = formData.get("file") as File;
+  const folder = (formData.get("folder") as string) || "leases";
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const { path, signedUrl } = await uploadPrivateFile(user!.id, folder, file);
