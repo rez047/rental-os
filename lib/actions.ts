@@ -195,7 +195,8 @@ export async function payRent(chargeId: string, amount: number) {
   return { clientSecret: intent.client_secret };
 }
 
-// M-Pesa STK Push (rent or deposit)
+
+// M-Pesa STK Push (rent, deposit, or custom partial amount)
 export async function initiateMpesaPayment(phone: string, amount: number, chargeId: string | null, paymentType: string = "rent", leaseId?: string) {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -212,31 +213,46 @@ export async function initiateMpesaPayment(phone: string, amount: number, charge
     orgId = lease.org_id;
   }
 
-  const { data: payment } = await supabase.from("payments").insert({
+  const receipt = `MPESA${Date.now()}`;
+
+  await supabase.from("payments").insert({
     org_id: orgId,
     lease_id: finalLeaseId,
     charge_id: chargeId,
     payer_user_id: user!.id,
     amount,
     mpesa_phone: phone,
-    status: "pending",
+    status: "paid",
     payment_type: paymentType,
+    mpesa_receipt: receipt,
     stripe_payment_intent: `mpesa_${Date.now()}`
-  }).select().single();
+  });
 
-  // TODO: real M-Pesa Daraja STK Push call goes here
-  setTimeout(async () => {
-    await supabase.from("payments").update({
-      status: "paid",
-      mpesa_receipt: `MPESA${Date.now()}`
-    }).eq("id", payment.id);
+  if (chargeId) {
+    await supabase.from("rent_charges").update({ status: "paid" }).eq("id", chargeId);
+  } else if (finalLeaseId && paymentType === "rent") {
+    // Allocate custom/partial amount to oldest unpaid charges first
+    let remaining = amount;
+    const { data: unpaid } = await supabase
+      .from("rent_charges")
+      .select("*")
+      .eq("lease_id", finalLeaseId)
+      .or("status.is.null,status.neq.paid")
+      .order("due_date", { ascending: true });
 
-    if (chargeId) {
-      await supabase.from("rent_charges").update({ status: "paid" }).eq("id", chargeId);
+    for (const c of unpaid || []) {
+      if (remaining >= Number(c.amount)) {
+        await supabase.from("rent_charges").update({ status: "paid" }).eq("id", c.id);
+        remaining -= Number(c.amount);
+      } else break;
     }
-  }, 10000);
+  }
 
-  return { success: true, message: "STK Push sent to your phone. Enter your PIN to complete payment." };
+  return {
+    success: true,
+    receipt,
+    message: `Payment of $${amount} received via M-Pesa (simulated). Receipt: ${receipt}`
+  };
 }
 
 export async function generateRentSchedule(leaseId: string) {
