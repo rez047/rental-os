@@ -26,6 +26,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     { label: "Leases", href: "/manager?tab=leases" },
     { label: "Payments & Invoices", href: "/manager?tab=payments" },
     { label: "Maintenance", href: "/manager?tab=maintenance" },
+    { label: "Messages", href: "/manager?tab=messages" },
     { label: "Reports", href: "/manager?tab=reports" },
     { label: "AI Assistant", href: "/manager?tab=ai" }
   ];
@@ -42,15 +43,18 @@ export default async function DashboardLayout({ children }: { children: React.Re
       { label: "Home", href: "/tenants" },
       { label: "My Lease", href: "/tenants?tab=lease" },
       { label: "Payments", href: "/tenants?tab=payments" },
-      { label: "Maintenance", href: "/tenants?tab=maintenance" }
+      { label: "Maintenance", href: "/tenants?tab=maintenance" },
+      { label: "Messages", href: "/tenants?tab=messages" }
     ],
     owner: [
       { label: "Portfolio", href: "/owner" },
-      { label: "Statements", href: "/owner?tab=statements" }
+      { label: "Statements", href: "/owner?tab=statements" },
+      { label: "Messages", href: "/owner?tab=messages" }
     ],
     vendor: [
       { label: "My Jobs", href: "/vendor" },
-      { label: "Completed", href: "/vendor?tab=completed" }
+      { label: "Completed", href: "/vendor?tab=completed" },
+      { label: "Messages", href: "/vendor?tab=messages" }
     ],
     admin: [{ label: "Admin Panel", href: "/admin" }]
   };
