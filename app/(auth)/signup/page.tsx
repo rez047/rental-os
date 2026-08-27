@@ -37,7 +37,17 @@ function SignupForm() {
     e.preventDefault();
     setLoading(true);
     try {
-      const result = await signUp(form.email, form.password, form.fullName, form.orgName || "My Organization");
+      const result: any = await signUp(
+        form.email,
+        form.password,
+        form.fullName,
+        form.orgName || "My Organization"
+      );
+
+      if (result?.error) {
+        alert(result.error);
+        return;
+      }
 
       if (result.invited) {
         const dest =
