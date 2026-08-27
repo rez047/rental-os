@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
-import { payRent, createMaintenanceRequest, addMaintenancePhoto } from "@/lib/actions";
+import { payRent, createMaintenanceRequest, addMaintenancePhoto, saveSignature } from "@/lib/actions";
 import { loadStripe } from "@stripe/stripe-js";
 import SignaturePad from "@/components/SignaturePad";
 import FileUploader from "@/components/FileUploader";
@@ -10,12 +10,13 @@ const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!
 
 export default function TenantPortal() {
   const supabase = createClient();
-  const [data, setData] = useState<any>({ lease: null, charges: [], payments: [], maintenance: [] });
+  const [data, setData] = useState<any>({ lease: null, charges: [], payments: [], maintenance: [], units: [], properties: [] });
   const [tab, setTab] = useState("home");
 
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
 
+    // FIXED: Use array query instead of .single() which crashes with 0 or 2+ results
     const { data: leases } = await supabase
       .from("leases")
       .select("*, units(*), properties(*)")
@@ -28,14 +29,12 @@ export default function TenantPortal() {
     const [charges, payments, maintenance] = await Promise.all([
       supabase.from("rent_charges").select("*").eq("tenant_user_id", user!.id).order("due_date"),
       supabase.from("payments").select("*").eq("payer_user_id", user!.id),
-      supabase.from("maintenance_requests").select("*").eq("reporter_user_id", user!.id)
+      supabase.from("maintenance_requests").select("*").eq("reporter_user_id", user!.id),
     ]);
 
     setData({
-      lease,
-      charges: charges.data || [],
-      payments: payments.data || [],
-      maintenance: maintenance.data || []
+      lease, charges: charges.data || [], payments: payments.data || [],
+      maintenance: maintenance.data || [], units: lease ? [lease.units] : [], properties: lease ? [lease.properties] : []
     });
   }
 
@@ -55,8 +54,12 @@ export default function TenantPortal() {
       payment_method: { card: cardElement }
     });
 
-    if (error) alert("Payment error: " + error.message);
-    else { alert("Payment successful!"); load(); }
+    if (error) {
+      alert("Payment error: " + error.message);
+    } else {
+      alert("Payment successful!");
+      load();
+    }
   }
 
   return (
@@ -124,7 +127,7 @@ export default function TenantPortal() {
 
       {tab === "lease" && !data.lease && (
         <div className="bg-white p-6 rounded-xl">
-          <p className="text-gray-500">No active lease yet.</p>
+          <p className="text-gray-500">No active lease yet. Your manager will assign one to you.</p>
         </div>
       )}
 
@@ -160,30 +163,37 @@ export default function TenantPortal() {
 
       {tab === "maintenance" && (
         <div>
-          <MaintenanceForm unitId={data.lease?.unit_id} propertyId={data.lease?.units?.property_id} onCreated={load} />
+          {/* FIXED: Always show the form, even without a lease */}
+          <MaintenanceForm 
+            unitId={data.lease?.unit_id || null} 
+            propertyId={data.lease?.units?.property_id || null} 
+            onCreated={load} 
+          />
           <div className="mt-6 space-y-3">
             {data.maintenance.map((m: any) => (
               <div key={m.id} className="bg-white p-4 rounded-xl">
-                <b>{m.title}</b>
-                <span className={`ml-2 text-xs px-2 py-1 rounded ${
-                  m.status === "completed" ? "bg-green-100" : "bg-yellow-100"
-                }`}>{m.status}</span>
+                <div className="flex justify-between">
+                  <b>{m.title}</b>
+                  <span className={`text-xs px-2 py-1 rounded ${
+                    m.status === "completed" ? "bg-green-100" : m.status === "in_progress" ? "bg-blue-100" : "bg-yellow-100"
+                  }`}>{m.status}</span>
+                </div>
                 <p className="text-sm text-gray-600 mt-1">{m.description}</p>
-                {/* NEW: Show issue photos */}
+                {/* Show issue photos */}
                 {(m.issue_photos || []).length > 0 && (
                   <div className="flex gap-2 mt-2">
-                    {m.issue_photos.map((ph: string, i: number) => (
-                      <a key={i} href={ph} target="_blank" className="text-indigo-600 text-xs underline">
+                    {m.issue_photos.map((ph: any, i: number) => (
+                      <a key={i} href={typeof ph === "string" ? ph : ph?.signedUrl} target="_blank" className="text-indigo-600 text-xs underline">
                         Photo {i + 1}
                       </a>
                     ))}
                   </div>
                 )}
-                {/* NEW: Show completion photos */}
+                {/* Show completion photos */}
                 {(m.completed_photos || []).length > 0 && (
                   <div className="flex gap-2 mt-2">
-                    {m.completed_photos.map((ph: string, i: number) => (
-                      <a key={i} href={ph} target="_blank" className="text-green-600 text-xs underline">
+                    {m.completed_photos.map((ph: any, i: number) => (
+                      <a key={i} href={typeof ph === "string" ? ph : ph?.signedUrl} target="_blank" className="text-green-600 text-xs underline">
                         Done {i + 1}
                       </a>
                     ))}
@@ -203,6 +213,9 @@ export default function TenantPortal() {
                 </div>
               </div>
             ))}
+            {data.maintenance.length === 0 && (
+              <p className="text-gray-400 text-sm">No maintenance requests yet.</p>
+            )}
           </div>
         </div>
       )}
@@ -210,7 +223,7 @@ export default function TenantPortal() {
   );
 }
 
-// UPDATED: Now supports photo uploads during request creation
+// FIXED: Shows even without a lease, includes photo upload
 function MaintenanceForm({ unitId, propertyId, onCreated }: any) {
   const [photos, setPhotos] = useState<any[]>([]);
 
@@ -218,8 +231,8 @@ function MaintenanceForm({ unitId, propertyId, onCreated }: any) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     await createMaintenanceRequest({
-      unitId, 
-      propertyId,
+      unitId: unitId, 
+      propertyId: propertyId,
       title: fd.get("title") as string,
       description: fd.get("description") as string,
       priority: fd.get("priority") as string,
@@ -230,21 +243,26 @@ function MaintenanceForm({ unitId, propertyId, onCreated }: any) {
     setPhotos([]);
   }
 
-  if (!unitId) return null;
-
   return (
     <form onSubmit={handleSubmit} className="bg-white p-6 rounded-xl">
       <h3 className="font-semibold mb-4">Submit Maintenance Request</h3>
-      <input name="title" placeholder="Issue title" required className="w-full p-2 border rounded mb-2" />
-      <textarea name="description" placeholder="Describe the issue" rows={3} className="w-full p-2 border rounded mb-2" />
+      
+      {!unitId && (
+        <div className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-700">
+          ⚠️ No active lease found. Your request will be submitted without a unit. Contact your manager if needed.
+        </div>
+      )}
+
+      <input name="title" placeholder="Issue title (e.g. Leaking faucet)" required className="w-full p-2 border rounded mb-2" />
+      <textarea name="description" placeholder="Describe the issue in detail" rows={3} required className="w-full p-2 border rounded mb-2" />
       <select name="priority" className="w-full p-2 border rounded mb-3">
-        <option value="low">Low</option>
-        <option value="medium">Medium</option>
-        <option value="high">High</option>
+        <option value="low">Low Priority</option>
+        <option value="medium">Medium Priority</option>
+        <option value="high">High Priority</option>
         <option value="emergency">Emergency</option>
       </select>
       
-      {/* NEW: Photo upload during request */}
+      {/* Photo upload */}
       <div className="mb-3">
         <div className="text-sm font-semibold mb-2">Upload Photos (optional)</div>
         <FileUploader 
@@ -253,7 +271,7 @@ function MaintenanceForm({ unitId, propertyId, onCreated }: any) {
           onUploaded={(meta) => setPhotos([...photos, meta.file])}
         />
         {photos.length > 0 && (
-          <div className="mt-2 text-sm text-gray-600">{photos.length} photo(s) uploaded</div>
+          <div className="mt-2 text-sm text-gray-600">{photos.length} photo(s) attached</div>
         )}
       </div>
 
