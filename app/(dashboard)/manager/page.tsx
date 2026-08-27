@@ -30,8 +30,10 @@ function ManagerDashboard() {
   const [aiMsg, setAiMsg] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<any>(null);
-  const [maintenancePhotos, setMaintenancePhotos] = useState<string[]>([]);
-  const [maintenanceVideos, setMaintenanceVideos] = useState<string[]>([]);
+  
+  // FIXED: Changed from string[] to any[] to accept both File and string objects from uploader
+  const [maintenancePhotos, setMaintenancePhotos] = useState<any[]>([]);
+  const [maintenanceVideos, setMaintenanceVideos] = useState<any[]>([]);
 
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
