@@ -2,9 +2,10 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase";
-import { generateRentSchedule, saveSignature, askAI } from "@/lib/actions";
+import { generateRentSchedule, saveSignature, askAI, createMaintenanceRequest } from "@/lib/actions";
 import SignaturePad from "@/components/SignaturePad";
 import PropertyAccess from "@/components/PropertyAccess";
+import FileUploader from "@/components/FileUploader";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell
 } from "recharts";
@@ -28,6 +29,9 @@ function ManagerDashboard() {
   });
   const [aiMsg, setAiMsg] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [selectedUnit, setSelectedUnit] = useState<any>(null);
+  const [maintenancePhotos, setMaintenancePhotos] = useState<string[]>([]);
+  const [maintenanceVideos, setMaintenanceVideos] = useState<string[]>([]);
 
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
@@ -112,7 +116,8 @@ function ManagerDashboard() {
       org_id: membership.org_id,
       property_id: fd.get("property_id") as string,
       name: fd.get("name") as string,
-      monthly_rent: Number(fd.get("monthly_rent"))
+      monthly_rent: Number(fd.get("monthly_rent")),
+      security_deposit: Number(fd.get("security_deposit") || 0)
     });
     load();
     (e.target as HTMLFormElement).reset();
@@ -124,20 +129,35 @@ function ManagerDashboard() {
     const { data: { user } } = await supabase.auth.getUser();
     const { data: membership } = await supabase.from("org_members").select("org_id").eq("user_id", user!.id).single();
 
+    const leaseType = fd.get("lease_type") as string;
+    const startDate = fd.get("start_date") as string;
+    const endDate = leaseType === "indefinite" ? "2099-12-31" : fd.get("end_date") as string;
+
     const { data: lease, error } = await supabase.from("leases").insert({
       org_id: membership.org_id,
       unit_id: fd.get("unit_id") as string,
       tenant_user_id: fd.get("tenant_user_id") as string,
-      start_date: fd.get("start_date") as string,
-      end_date: fd.get("end_date") as string,
+      start_date: startDate,
+      end_date: endDate,
       monthly_rent: Number(fd.get("monthly_rent")),
       security_deposit: Number(fd.get("security_deposit") || 0),
+      lease_type: leaseType,
       status: "active"
     }).select().single();
 
-    if (!error && lease) await generateRentSchedule(lease.id);
-    alert(error ? error.message : "Lease created + rent schedule generated!");
+    if (error) {
+      alert("Lease error: " + error.message);
+      return;
+    }
+
+    if (lease && leaseType === "fixed") {
+      await generateRentSchedule(lease.id);
+    }
+
+    alert(`Lease created (${leaseType})! ${leaseType === "fixed" ? "Rent schedule generated." : "No schedule for indefinite lease."}`);
     load();
+    (e.target as HTMLFormElement).reset();
+    setSelectedUnit(null);
   }
 
   async function setMaintenanceStatus(id: string, status: string) {
@@ -155,7 +175,31 @@ function ManagerDashboard() {
     load();
   }
 
+  async function submitMaintenance(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    await createMaintenanceRequest({
+      unitId: fd.get("unit_id") as string,
+      propertyId: fd.get("property_id") as string,
+      title: fd.get("title") as string,
+      description: fd.get("description") as string,
+      priority: fd.get("priority") as string,
+      issuePhotos: maintenancePhotos,
+      issueVideos: maintenanceVideos
+    });
+    setMaintenancePhotos([]);
+    setMaintenanceVideos([]);
+    (e.target as HTMLFormElement).reset();
+    load();
+    alert("Maintenance request submitted!");
+  }
+
   const tenants = data.members.filter((m: any) => m.role === "tenant");
+
+  function handleUnitSelect(unitId: string) {
+    const unit = data.units.find((u: any) => u.id === unitId);
+    setSelectedUnit(unit);
+  }
 
   return (
     <div>
@@ -211,7 +255,8 @@ function ManagerDashboard() {
                 {data.properties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
               <input name="name" placeholder="Unit name (e.g. A1)" required className="w-full p-2 border rounded mb-2" />
-              <input name="monthly_rent" type="number" placeholder="Monthly rent" required className="w-full p-2 border rounded mb-3" />
+              <input name="monthly_rent" type="number" placeholder="Monthly rent" required className="w-full p-2 border rounded mb-2" />
+              <input name="security_deposit" type="number" placeholder="Security deposit" className="w-full p-2 border rounded mb-3" />
               <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Add Unit</button>
             </form>
           </div>
@@ -275,16 +320,20 @@ function ManagerDashboard() {
               <option value="">Tenant…</option>
               {tenants.map((m: any) => <option key={m.user_id} value={m.user_id}>{m.profiles?.email}</option>)}
             </select>
-            <select name="unit_id" required className="p-2 border rounded">
+            <select name="unit_id" required className="p-2 border rounded" onChange={(e) => handleUnitSelect(e.target.value)}>
               <option value="">Unit…</option>
               {data.units.map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
             </select>
-            <input name="monthly_rent" type="number" placeholder="Monthly rent" required className="p-2 border rounded" />
+            <select name="lease_type" required className="p-2 border rounded">
+              <option value="fixed">Fixed Period</option>
+              <option value="indefinite">Indefinite</option>
+            </select>
             <input name="start_date" type="date" required className="p-2 border rounded" />
-            <input name="end_date" type="date" required className="p-2 border rounded" />
-            <input name="security_deposit" type="number" placeholder="Deposit" className="p-2 border rounded" />
+            <input name="end_date" type="date" className="p-2 border rounded" />
+            <input name="monthly_rent" type="number" placeholder="Monthly rent" readOnly value={selectedUnit?.monthly_rent || ""} required className="p-2 border rounded bg-gray-50" />
+            <input name="security_deposit" type="number" placeholder="Deposit" readOnly value={selectedUnit?.security_deposit || 0} className="p-2 border rounded bg-gray-50" />
             <button className="col-span-3 px-4 py-2 bg-indigo-600 text-white rounded-lg">
-              Create Lease + Rent Schedule
+              Create Lease
             </button>
           </form>
 
@@ -296,7 +345,7 @@ function ManagerDashboard() {
                   <span className="text-sm text-gray-500">{emailOf(l.tenant_user_id)}</span>
                 </div>
                 <p className="text-sm text-gray-600">
-                  {l.start_date} → {l.end_date} • ${l.monthly_rent}/mo • Deposit ${l.security_deposit}
+                  {l.start_date} → {l.lease_type === "indefinite" ? "Indefinite" : l.end_date} • ${l.monthly_rent}/mo • Deposit ${l.security_deposit}
                 </p>
                 <div className="flex gap-4 mt-2 text-sm">
                   <span>{l.signed_by_tenant ? "✅ Tenant signed" : "⏳ Tenant signature pending"}</span>
@@ -355,41 +404,92 @@ function ManagerDashboard() {
       )}
 
       {tab === "maintenance" && (
-        <div className="space-y-3">
-          {data.maintenance.map((m: any) => (
-            <div key={m.id} className="bg-white p-6 rounded-xl">
-              <div className="flex justify-between">
-                <b>{m.title}</b>
-                <span className={`text-xs px-2 py-1 rounded ${
-                  m.status === "completed" ? "bg-green-100" : m.status === "in_progress" ? "bg-blue-100" : "bg-yellow-100"
-                }`}>{m.status}</span>
-              </div>
-              <p className="text-sm text-gray-600 mt-1">{m.description}</p>
-              <p className="text-xs text-gray-400 mt-1">
-                Priority: {m.priority} • Reported by: {emailOf(m.reporter_user_id)}
-              </p>
-              {(m.photos || []).length > 0 && (
-                <div className="flex gap-2 mt-2">
-                  {m.photos.map((ph: any, i: number) => (
-                    <a key={i} href={ph.signedUrl} target="_blank" className="text-indigo-600 text-xs underline">
-                      Photo {i + 1}
-                    </a>
-                  ))}
-                </div>
-              )}
-              <div className="flex gap-2 mt-3">
-                {m.status !== "in_progress" && m.status !== "completed" && (
-                  <button onClick={() => setMaintenanceStatus(m.id, "in_progress")}
-                    className="px-3 py-1 bg-blue-600 text-white rounded text-sm">Start Work</button>
+        <div className="space-y-6">
+          <form onSubmit={submitMaintenance} className="bg-white p-6 rounded-xl">
+            <h3 className="font-semibold mb-4">Create Maintenance Request</h3>
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <select name="property_id" required className="p-2 border rounded">
+                <option value="">Property…</option>
+                {data.properties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <select name="unit_id" required className="p-2 border rounded">
+                <option value="">Unit…</option>
+                {data.units.map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </select>
+            </div>
+            <input name="title" placeholder="Issue title" required className="w-full p-2 border rounded mb-2" />
+            <textarea name="description" placeholder="Describe the issue" rows={3} required className="w-full p-2 border rounded mb-2" />
+            <select name="priority" required className="w-full p-2 border rounded mb-3">
+              <option value="low">Low Priority</option>
+              <option value="medium">Medium Priority</option>
+              <option value="high">High Priority</option>
+              <option value="emergency">Emergency</option>
+            </select>
+
+            <div className="space-y-3 mb-3">
+              <div>
+                <div className="text-sm font-semibold mb-2">Issue Photos</div>
+                <FileUploader 
+                  folder="maintenance" 
+                  mode="image" 
+                  onUploaded={(meta) => setMaintenancePhotos([...maintenancePhotos, meta.file])}
+                />
+                {maintenancePhotos.length > 0 && (
+                  <div className="mt-2 text-sm text-gray-600">{maintenancePhotos.length} photo(s) uploaded</div>
                 )}
-                {m.status !== "completed" && (
-                  <button onClick={() => setMaintenanceStatus(m.id, "completed")}
-                    className="px-3 py-1 bg-green-600 text-white rounded text-sm">Mark Completed</button>
+              </div>
+              <div>
+                <div className="text-sm font-semibold mb-2">Issue Videos (optional)</div>
+                <FileUploader 
+                  folder="maintenance" 
+                  mode="video" 
+                  onUploaded={(meta) => setMaintenanceVideos([...maintenanceVideos, meta.file])}
+                />
+                {maintenanceVideos.length > 0 && (
+                  <div className="mt-2 text-sm text-gray-600">{maintenanceVideos.length} video(s) uploaded</div>
                 )}
               </div>
             </div>
-          ))}
-          {data.maintenance.length === 0 && <p className="text-gray-400">No maintenance requests.</p>}
+
+            <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Submit Request</button>
+          </form>
+
+          <div className="space-y-3">
+            {data.maintenance.map((m: any) => (
+              <div key={m.id} className="bg-white p-6 rounded-xl">
+                <div className="flex justify-between">
+                  <b>{m.title}</b>
+                  <span className={`text-xs px-2 py-1 rounded ${
+                    m.status === "completed" ? "bg-green-100" : m.status === "in_progress" ? "bg-blue-100" : "bg-yellow-100"
+                  }`}>{m.status}</span>
+                </div>
+                <p className="text-sm text-gray-600 mt-1">{m.description}</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  Priority: {m.priority} • Reported by: {emailOf(m.reporter_user_id)}
+                </p>
+                {(m.issue_photos || []).length > 0 && (
+                  <div className="flex gap-2 mt-2">
+                    {m.issue_photos.map((ph: string, i: number) => (
+                      <a key={i} href={ph} target="_blank" className="text-indigo-600 text-xs underline">
+                        Photo {i + 1}
+                      </a>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2 mt-3">
+                  {m.status !== "in_progress" && m.status !== "completed" && (
+                    <button onClick={() => setMaintenanceStatus(m.id, "in_progress")}
+                      className="px-3 py-1 bg-blue-600 text-white rounded text-sm">Start Work</button>
+                  )}
+                  {m.status !== "completed" && (
+                    <button onClick={() => setMaintenanceStatus(m.id, "completed")}
+                      className="px-3 py-1 bg-green-600 text-white rounded text-sm">Mark Completed</button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {data.maintenance.length === 0 && <p className="text-gray-400">No maintenance requests.</p>}
+          </div>
         </div>
       )}
 
