@@ -16,8 +16,6 @@ export default function TenantPortal() {
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
 
-    // FIXED: fetch ALL active leases and take the newest one.
-    // (.single() crashes when there are 0 or 2+ leases → caused "No active lease")
     const { data: leases } = await supabase
       .from("leases")
       .select("*, units(*), properties(*)")
@@ -171,6 +169,31 @@ export default function TenantPortal() {
                   m.status === "completed" ? "bg-green-100" : "bg-yellow-100"
                 }`}>{m.status}</span>
                 <p className="text-sm text-gray-600 mt-1">{m.description}</p>
+                {/* NEW: Show issue photos */}
+                {(m.issue_photos || []).length > 0 && (
+                  <div className="flex gap-2 mt-2">
+                    {m.issue_photos.map((ph: string, i: number) => (
+                      <a key={i} href={ph} target="_blank" className="text-indigo-600 text-xs underline">
+                        Photo {i + 1}
+                      </a>
+                    ))}
+                  </div>
+                )}
+                {/* NEW: Show completion photos */}
+                {(m.completed_photos || []).length > 0 && (
+                  <div className="flex gap-2 mt-2">
+                    {m.completed_photos.map((ph: string, i: number) => (
+                      <a key={i} href={ph} target="_blank" className="text-green-600 text-xs underline">
+                        Done {i + 1}
+                      </a>
+                    ))}
+                  </div>
+                )}
+                {m.completed_at && (
+                  <div className="text-xs text-green-600 mt-1">
+                    ✅ Completed: {new Date(m.completed_at).toLocaleString()}
+                  </div>
+                )}
                 <div className="mt-2">
                   <FileUploader folder="maintenance" mode="image-video"
                     onUploaded={async (meta) => {
@@ -187,18 +210,24 @@ export default function TenantPortal() {
   );
 }
 
+// UPDATED: Now supports photo uploads during request creation
 function MaintenanceForm({ unitId, propertyId, onCreated }: any) {
+  const [photos, setPhotos] = useState<any[]>([]);
+
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     await createMaintenanceRequest({
-      unitId, propertyId,
+      unitId, 
+      propertyId,
       title: fd.get("title") as string,
       description: fd.get("description") as string,
-      priority: fd.get("priority") as string
+      priority: fd.get("priority") as string,
+      issuePhotos: photos
     });
     onCreated();
     (e.target as HTMLFormElement).reset();
+    setPhotos([]);
   }
 
   if (!unitId) return null;
@@ -206,7 +235,7 @@ function MaintenanceForm({ unitId, propertyId, onCreated }: any) {
   return (
     <form onSubmit={handleSubmit} className="bg-white p-6 rounded-xl">
       <h3 className="font-semibold mb-4">Submit Maintenance Request</h3>
-      <input name="title" placeholder="Title" required className="w-full p-2 border rounded mb-2" />
+      <input name="title" placeholder="Issue title" required className="w-full p-2 border rounded mb-2" />
       <textarea name="description" placeholder="Describe the issue" rows={3} className="w-full p-2 border rounded mb-2" />
       <select name="priority" className="w-full p-2 border rounded mb-3">
         <option value="low">Low</option>
@@ -214,6 +243,20 @@ function MaintenanceForm({ unitId, propertyId, onCreated }: any) {
         <option value="high">High</option>
         <option value="emergency">Emergency</option>
       </select>
+      
+      {/* NEW: Photo upload during request */}
+      <div className="mb-3">
+        <div className="text-sm font-semibold mb-2">Upload Photos (optional)</div>
+        <FileUploader 
+          folder="maintenance" 
+          mode="image-video" 
+          onUploaded={(meta) => setPhotos([...photos, meta.file])}
+        />
+        {photos.length > 0 && (
+          <div className="mt-2 text-sm text-gray-600">{photos.length} photo(s) uploaded</div>
+        )}
+      </div>
+
       <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Submit Request</button>
     </form>
   );
