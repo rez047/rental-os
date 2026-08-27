@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from "recharts";
+import MessagesPanel from "@/components/MessagesPanel";
 
 export default function OwnerPortal() {
   const supabase = createClient();
@@ -14,7 +15,6 @@ export default function OwnerPortal() {
       .from("org_members").select("org_id")
       .eq("user_id", user!.id).eq("status", "active").single();
 
-    // ONLY properties this owner co-owns
     const { data: ownedRows } = await supabase
       .from("property_owners").select("property_id")
       .eq("user_id", user!.id);
@@ -25,7 +25,7 @@ export default function OwnerPortal() {
       .eq("org_id", membership.org_id)
       .in("id", ownedIds.length ? ownedIds : ["00000000-0000-0000-0000-000000000000"]);
 
-    const props = properties || []; // Fixed: properties is already the array
+    const props = properties || [];
     const unitIds = props.flatMap((p: any) => (p.units || []).map((u: any) => u.id));
 
     const { data: leases } = await supabase
@@ -67,7 +67,7 @@ export default function OwnerPortal() {
     <div>
       <h1 className="text-3xl font-bold mb-6">Owner Portal</h1>
       <div className="flex gap-2 mb-6">
-        {["portfolio", "statements"].map(t => (
+        {["portfolio", "statements", "messages"].map(t => (
           <button key={t} onClick={() => setTab(t)}
             className={`px-4 py-2 rounded-lg ${tab === t ? "bg-indigo-600 text-white" : "bg-white"}`}>
             {t.charAt(0).toUpperCase() + t.slice(1)}
@@ -140,6 +140,8 @@ export default function OwnerPortal() {
           </div>
         </div>
       )}
+
+      {tab === "messages" && <MessagesPanel />}
     </div>
   );
 }
