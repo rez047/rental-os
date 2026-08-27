@@ -1,8 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import { signOut } from "@/lib/actions";
-import { redirect } from "next/navigation";
+import { handleSignOut } from "@/lib/actions";
 
 interface NavItem {
   label: string;
@@ -108,13 +107,7 @@ export default function DashboardSidebar({ role, orgName, userEmail, navItems }:
           </div>
         )}
         
-        <form
-          action={async () => {
-            "use server";
-            await signOut();
-            redirect("/login");
-          }}
-        >
+        <form action={handleSignOut}>
           <button
             className={`text-sm text-red-600 ${collapsed ? "text-xs" : ""}`}
             title={collapsed ? "Sign out" : undefined}
