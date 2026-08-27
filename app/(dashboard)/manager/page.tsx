@@ -6,6 +6,7 @@ import { generateRentSchedule, saveSignature, askAI, createMaintenanceRequest, e
 import SignaturePad from "@/components/SignaturePad";
 import PropertyAccess from "@/components/PropertyAccess";
 import FileUploader from "@/components/FileUploader";
+import MessagesPanel from "@/components/MessagesPanel";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell
 } from "recharts";
@@ -30,11 +31,10 @@ function ManagerDashboard() {
   const [aiMsg, setAiMsg] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<any>(null);
-  
+
   const [maintenancePhotos, setMaintenancePhotos] = useState<any[]>([]);
   const [maintenanceVideos, setMaintenanceVideos] = useState<any[]>([]);
 
-  // NEW: Eviction state
   const [evictModal, setEvictModal] = useState<{ leaseId: string; tenantEmail: string } | null>(null);
   const [evictionReason, setEvictionReason] = useState("");
 
@@ -170,7 +170,7 @@ function ManagerDashboard() {
   }
 
   async function setMaintenanceStatus(id: string, status: string) {
-    await supabase.from("maintenance_requests").update({ 
+    await supabase.from("maintenance_requests").update({
       status,
       ...(status === "completed" ? { completed_at: new Date().toISOString() } : {})
     }).eq("id", id);
@@ -207,7 +207,6 @@ function ManagerDashboard() {
     alert("Task created!");
   }
 
-  // NEW: Eviction handler
   async function handleEvict() {
     if (!evictModal) return;
     await evictTenant(evictModal.leaseId, evictionReason);
@@ -392,15 +391,14 @@ function ManagerDashboard() {
                   <span>{l.signed_by_tenant ? "✅ Tenant signed" : "⏳ Tenant signature pending"}</span>
                   <span>{l.signed_by_manager ? "✅ Manager signed" : "⏳ Manager signature pending"}</span>
                 </div>
-                <div className="flex gap-2 mt-3 flex-wrap">
+                <div className="flex gap-2 mt-3 flex-wrap items-center">
                   {!l.signed_by_manager && (
                     <div className="max-w-md">
                       <SignaturePad leaseId={l.id} role="manager" onSigned={load} />
                     </div>
                   )}
-                  {/* NEW: Evict button */}
                   {!l.evicted && l.status === "active" && (
-                    <button 
+                    <button
                       onClick={() => setEvictModal({ leaseId: l.id, tenantEmail: emailOf(l.tenant_user_id) })}
                       className="px-3 py-1 bg-red-600 text-white rounded text-sm"
                     >
@@ -489,9 +487,9 @@ function ManagerDashboard() {
             <div className="space-y-3 mb-3">
               <div>
                 <div className="text-sm font-semibold mb-2">Reference Photos (optional)</div>
-                <FileUploader 
-                  folder="maintenance" 
-                  mode="image-video" 
+                <FileUploader
+                  folder="maintenance"
+                  mode="image-video"
                   onUploaded={(meta) => setMaintenancePhotos([...maintenancePhotos, meta.file])}
                 />
                 {maintenancePhotos.length > 0 && (
@@ -500,9 +498,9 @@ function ManagerDashboard() {
               </div>
               <div>
                 <div className="text-sm font-semibold mb-2">Reference Videos (optional)</div>
-                <FileUploader 
-                  folder="maintenance" 
-                  mode="image-video" 
+                <FileUploader
+                  folder="maintenance"
+                  mode="image-video"
                   onUploaded={(meta) => setMaintenanceVideos([...maintenanceVideos, meta.file])}
                 />
                 {maintenanceVideos.length > 0 && (
@@ -578,6 +576,8 @@ function ManagerDashboard() {
         </div>
       )}
 
+      {tab === "messages" && <MessagesPanel />}
+
       {tab === "reports" && (
         <div className="grid grid-cols-2 gap-4">
           <div className="bg-white p-6 rounded-xl h-80">
@@ -615,7 +615,7 @@ function ManagerDashboard() {
             ))}
           </div>
           <form onSubmit={sendAI} className="flex gap-2">
-            <input value={aiMsg} onChange={e => setAiMsg(e.target.value)}
+            <input value={aiMsg} onChange={(e) => setAiMsg(e.target.value)}
               placeholder="Ask about your portfolio…" className="flex-1 p-3 border rounded-lg" />
             <button disabled={aiBusy} className="px-5 py-3 bg-indigo-600 text-white rounded-lg">
               {aiBusy ? "Thinking…" : "Send"}
@@ -624,7 +624,6 @@ function ManagerDashboard() {
         </div>
       )}
 
-      {/* NEW: Eviction Modal */}
       {evictModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-xl max-w-md w-full mx-4">
@@ -640,16 +639,11 @@ function ManagerDashboard() {
               className="w-full p-2 border rounded mb-4"
             />
             <div className="flex gap-2">
-              <button
-                onClick={handleEvict}
-                className="flex-1 px-4 py-2 bg-red-600 text-white rounded"
-              >
+              <button onClick={handleEvict} className="flex-1 px-4 py-2 bg-red-600 text-white rounded">
                 Confirm Eviction
               </button>
-              <button
-                onClick={() => { setEvictModal(null); setEvictionReason(""); }}
-                className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded"
-              >
+              <button onClick={() => { setEvictModal(null); setEvictionReason(""); }}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded">
                 Cancel
               </button>
             </div>
