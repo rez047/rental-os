@@ -26,7 +26,7 @@ function addMonths(d: Date, n: number) {
 
 function leaseMonthCount(lease: any) {
   if (!lease) return 0;
-  if (lease.lease_type === "indefinite") return 1; // current month only
+  if (lease.lease_type === "indefinite") return 1;
   const start = new Date(lease.start_date);
   const end = new Date(lease.end_date);
   let count = 0;
@@ -82,7 +82,6 @@ function TenantDashboard() {
   const leaseCharges = data.charges.filter((c: any) => c.lease_id === selectedLeaseId);
   const depositPaid = data.payments.some((p: any) => p.lease_id === selectedLeaseId && p.payment_type === "deposit" && p.status === "paid");
 
-  // Automatic rent calculation
   const months = leaseMonthCount(selectedLease);
   const rentTotal = months * Number(selectedLease?.monthly_rent || 0);
   const deposit = Number(selectedLease?.security_deposit || 0);
@@ -218,7 +217,6 @@ function TenantDashboard() {
                   className="w-full p-2 border rounded" />
               </div>
 
-              {/* NEW: Automatic rent calculation summary */}
               <div className="bg-white p-6 rounded-xl">
                 <h3 className="font-semibold mb-3">Payment Summary — {selectedLease.units?.name}</h3>
                 <div className="grid grid-cols-2 gap-3 text-sm">
@@ -232,7 +230,6 @@ function TenantDashboard() {
                 </div>
               </div>
 
-              {/* Deposit row */}
               {deposit > 0 && (
                 <div className="bg-white p-6 rounded-xl flex justify-between items-center">
                   <div>
@@ -250,7 +247,6 @@ function TenantDashboard() {
                 </div>
               )}
 
-              {/* NEW: Pay any amount (partial payment prompt) */}
               <div className="bg-white p-6 rounded-xl">
                 <h3 className="font-semibold mb-2">Pay Any Amount (Partial Payment)</h3>
                 <p className="text-sm text-gray-500 mb-3">
@@ -267,7 +263,6 @@ function TenantDashboard() {
                 </div>
               </div>
 
-              {/* Rent schedule with colors */}
               <div className="bg-white p-6 rounded-xl">
                 <h3 className="font-semibold mb-4">Rent Schedule — {selectedLease.units?.name}</h3>
                 {leaseCharges.length === 0 ? (
@@ -367,7 +362,12 @@ function TenantDashboard() {
                 <div className="mt-2">
                   <FileUploader folder="maintenance" mode="image-video"
                     onUploaded={async (meta: any) => {
-                      await addMaintenancePhoto(m.id, meta.file);
+                      const f = meta?.file ?? meta;
+                      if (f instanceof File) {
+                        const fd = new FormData();
+                        fd.append("file", f);
+                        await addMaintenancePhoto(m.id, fd);
+                      }
                       load();
                     }} />
                 </div>
@@ -383,7 +383,6 @@ function TenantDashboard() {
   );
 }
 
-/* ---------- Lease card (signature untouched, move-in fixed) ---------- */
 function LeaseCard({ lease, onSigned }: any) {
   const isIndefinite = lease.lease_type === "indefinite";
   const hasMedia = (lease.move_in_photos || []).length > 0 || (lease.move_in_videos || []).length > 0;
@@ -440,7 +439,7 @@ function LeaseCard({ lease, onSigned }: any) {
   );
 }
 
-/* ---------- FIXED Move-in form: native pickers, visible uploads, working save ---------- */
+/* ---------- FIXED Move-in form: camera capture + gallery, FormData uploads ---------- */
 function MoveInForm({ leaseId, onSaved }: any) {
   const [photos, setPhotos] = useState<any[]>([]);
   const [videos, setVideos] = useState<any[]>([]);
@@ -454,7 +453,10 @@ function MoveInForm({ leaseId, onSaved }: any) {
     setError("");
     try {
       for (const f of files) {
-        const res = await uploadLeaseMedia(f, "leases");
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("folder", "leases");
+        const res = await uploadLeaseMedia(fd);
         if (kind === "photo") setPhotos((p) => [...p, { path: res.path, name: f.name }]);
         else setVideos((v) => [...v, { path: res.path, name: f.name }]);
       }
@@ -463,6 +465,12 @@ function MoveInForm({ leaseId, onSaved }: any) {
     } finally {
       setBusy(false);
     }
+  }
+
+  function pick(e: React.ChangeEvent<HTMLInputElement>, kind: "photo" | "video") {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    uploadFiles(files, kind);
   }
 
   async function save() {
@@ -479,28 +487,42 @@ function MoveInForm({ leaseId, onSaved }: any) {
   }
 
   return (
-    <div className="space-y-3">
-      <p className="text-sm text-gray-600">Record the house condition with photos/videos for your records.</p>
+    <div className="space-y-4">
+      <p className="text-sm text-gray-600">Record the house condition with photos/videos as proof. Take new ones with your camera or choose from your device.</p>
 
       <div>
-        <div className="text-sm font-semibold mb-1">Photos</div>
-        <input type="file" accept="image/*" multiple
-          onChange={(e) => uploadFiles(Array.from(e.target.files || []), "photo")}
-          className="text-sm" />
+        <div className="text-sm font-semibold mb-2">Photos</div>
+        <div className="flex gap-2 flex-wrap">
+          <label className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm cursor-pointer">
+            📷 Take Photo
+            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => pick(e, "photo")} />
+          </label>
+          <label className="px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm cursor-pointer">
+            🖼️ Choose Photos
+            <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => pick(e, "photo")} />
+          </label>
+        </div>
         {photos.length > 0 && (
-          <ul className="mt-1 text-sm text-gray-600 list-disc ml-4">
+          <ul className="mt-2 text-sm text-gray-600 list-disc ml-4">
             {photos.map((p, i) => <li key={i}>✅ {p.name}</li>)}
           </ul>
         )}
       </div>
 
       <div>
-        <div className="text-sm font-semibold mb-1">Videos (optional)</div>
-        <input type="file" accept="video/*" multiple
-          onChange={(e) => uploadFiles(Array.from(e.target.files || []), "video")}
-          className="text-sm" />
+        <div className="text-sm font-semibold mb-2">Videos (optional)</div>
+        <div className="flex gap-2 flex-wrap">
+          <label className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm cursor-pointer">
+            🎥 Record Video
+            <input type="file" accept="video/*" capture="environment" className="hidden" onChange={(e) => pick(e, "video")} />
+          </label>
+          <label className="px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm cursor-pointer">
+            🎬 Choose Videos
+            <input type="file" accept="video/*" multiple className="hidden" onChange={(e) => pick(e, "video")} />
+          </label>
+        </div>
         {videos.length > 0 && (
-          <ul className="mt-1 text-sm text-gray-600 list-disc ml-4">
+          <ul className="mt-2 text-sm text-gray-600 list-disc ml-4">
             {videos.map((v, i) => <li key={i}>✅ {v.name}</li>)}
           </ul>
         )}
@@ -537,14 +559,24 @@ function SignedLink({ path, label, green }: { path: string; label: string; green
 
 function MaintenanceForm({ unitId, propertyId, onCreated }: any) {
   const [photos, setPhotos] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
 
-  async function handleUpload(meta: any) {
-    let path = meta?.path;
-    if (!path && meta?.file instanceof File) {
-      const res = await uploadLeaseMedia(meta.file, "maintenance");
-      path = res.path;
+  async function pick(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (!files.length) return;
+    setBusy(true);
+    try {
+      for (const f of files) {
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("folder", "maintenance");
+        const res = await uploadLeaseMedia(fd);
+        setPhotos((p) => [...p, res.path]);
+      }
+    } finally {
+      setBusy(false);
     }
-    if (path) setPhotos((p) => [...p, path]);
   }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -580,7 +612,17 @@ function MaintenanceForm({ unitId, propertyId, onCreated }: any) {
       </select>
       <div className="mb-3">
         <div className="text-sm font-semibold mb-2">Upload Photos (optional)</div>
-        <FileUploader folder="maintenance" mode="image-video" onUploaded={(meta: any) => handleUpload(meta)} />
+        <div className="flex gap-2 flex-wrap">
+          <label className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm cursor-pointer">
+            📷 Take Photo
+            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={pick} />
+          </label>
+          <label className="px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm cursor-pointer">
+            🖼️ Choose Photos
+            <input type="file" accept="image/*" multiple className="hidden" onChange={pick} />
+          </label>
+        </div>
+        {busy && <p className="text-sm text-indigo-600 mt-1">Uploading…</p>}
         {photos.length > 0 && <div className="mt-2 text-sm text-gray-600">{photos.length} photo(s) attached</div>}
       </div>
       <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Submit Request</button>
