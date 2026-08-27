@@ -3,8 +3,10 @@ import { useState } from "react";
 import { signIn } from "@/lib/actions";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { createClient } from "@/lib/supabase";
 
 export default function Login() {
+  const supabase = createClient();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -15,7 +17,24 @@ export default function Login() {
     setLoading(true);
     try {
       await signIn(email, password);
-      router.push("/manager");
+
+      // Get the logged-in user's role to route them correctly
+      const { data: { user } } = await supabase.auth.getUser();
+      const { data: membership } = await supabase
+        .from("org_members")
+        .select("role")
+        .eq("user_id", user!.id)
+        .eq("status", "active")
+        .single();
+
+      const role = membership?.role;
+
+      if (role === "tenant") router.push("/tenants");
+      else if (role === "vendor") router.push("/vendor");
+      else if (role === "owner") router.push("/owner");
+      else if (role === "manager") router.push("/manager");
+      else router.push("/admin"); // defaults to owner_admin
+
     } catch (err: any) {
       alert(err.message);
     } finally {
