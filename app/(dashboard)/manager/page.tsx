@@ -1,436 +1,448 @@
 "use client";
-import { useEffect, useState } from "react";
-import { createClient } from "@/lib/supabase";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import {
-  generateRentSchedule, uploadDocument, askAI,
-  createMaintenanceRequest
-} from "@/lib/actions";
-import FileUploader from "@/components/FileUploader";
+import { createClient } from "@/lib/supabase";
+import { generateRentSchedule, saveSignature, askAI } from "@/lib/actions";
 import SignaturePad from "@/components/SignaturePad";
+import PropertyAccess from "@/components/PropertyAccess";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell
 } from "recharts";
 
-export default function ManagerDashboard() {
-  const searchParams = useSearchParams();
-  const tab = searchParams.get("tab") || "dashboard";
+export default function ManagerPage() {
+  return (
+    <Suspense fallback={<div className="p-8">Loading...</div>}>
+      <ManagerDashboard />
+    </Suspense>
+  );
+}
+
+function ManagerDashboard() {
   const supabase = createClient();
+  const params = useSearchParams();
+  const tab = params.get("tab") || "dashboard";
 
   const [data, setData] = useState<any>({
     properties: [], units: [], leases: [], charges: [], payments: [],
-    maintenance: [], tenants: [], documents: []
+    maintenance: [], members: [], profiles: [], ai: []
   });
+  const [aiMsg, setAiMsg] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
 
-  async function loadAll() {
+  async function load() {
     const { data: { user } } = await supabase.auth.getUser();
-    const { data: membership } = await supabase.from("org_members")
-      .select("org_id").eq("user_id", user!.id).single();
+    const { data: membership } = await supabase
+      .from("org_members").select("org_id")
+      .eq("user_id", user!.id).eq("status", "active").single();
     const orgId = membership.org_id;
 
-    const [properties, units, leases, charges, payments, maintenance, tenants, documents] = await Promise.all([
-      supabase.from("properties").select("*").eq("org_id", orgId),
-      supabase.from("units").select("*").eq("org_id", orgId),
-      supabase.from("leases").select("*").eq("org_id", orgId),
-      supabase.from("rent_charges").select("*").eq("org_id", orgId),
-      supabase.from("payments").select("*").eq("org_id", orgId),
-      supabase.from("maintenance_requests").select("*").eq("org_id", orgId),
-      supabase.from("profiles").select("*"),
-      supabase.from("documents").select("*").eq("org_id", orgId),
-    ]);
+    const [properties, units, leases, charges, payments, maintenance, members, profiles, ai] =
+      await Promise.all([
+        supabase.from("properties").select("*, units(*)").eq("org_id", orgId),
+        supabase.from("units").select("*").eq("org_id", orgId),
+        supabase.from("leases").select("*, units(name, property_id), properties(name)").eq("org_id", orgId),
+        supabase.from("rent_charges").select("*").eq("org_id", orgId),
+        supabase.from("payments").select("*").eq("org_id", orgId),
+        supabase.from("maintenance_requests").select("*").eq("org_id", orgId),
+        supabase.from("org_members").select("user_id, role, status, profiles(email, full_name)").eq("org_id", orgId),
+        supabase.from("profiles").select("id, email, full_name"),
+        supabase.from("ai_messages").select("*").eq("org_id", orgId).order("created_at")
+      ]);
 
     setData({
-      properties: properties.data || [], units: units.data || [], leases: leases.data || [],
-      charges: charges.data || [], payments: payments.data || [],
-      maintenance: maintenance.data || [], tenants: tenants.data || [], documents: documents.data || []
+      properties: properties.data || [],
+      units: units.data || [],
+      leases: leases.data || [],
+      charges: charges.data || [],
+      payments: payments.data || [],
+      maintenance: maintenance.data || [],
+      members: members.data || [],
+      profiles: profiles.data || [],
+      ai: ai.data || []
     });
   }
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => { load(); }, []);
 
-  return (
-    <div>
-      {tab === "dashboard" && <Dashboard data={data} />}
-      {tab === "properties" && <PropertiesTab data={data} reload={loadAll} />}
-      {tab === "tenants" && <TenantsTab data={data} reload={loadAll} />}
-      {tab === "leases" && <LeasesTab data={data} reload={loadAll} />}
-      {tab === "payments" && <PaymentsTab data={data} />}
-      {tab === "maintenance" && <MaintenanceTab data={data} reload={loadAll} />}
-      {tab === "reports" && <ReportsTab data={data} />}
-      {tab === "ai" && <AITab />}
-    </div>
-  );
-}
+  const emailOf = (id: string) => data.profiles.find((p: any) => p.id === id)?.email || "—";
+  const memberName = (id: string) => {
+    const m = data.members.find((m: any) => m.user_id === id);
+    return m?.profiles?.full_name || m?.profiles?.email || "—";
+  };
 
-function Dashboard({ data }: any) {
-  const occupied = data.units.filter((u: any) => u.status === "occupied").length;
-  const vacant = data.units.filter((u: any) => u.status === "vacant").length;
-  const totalRent = data.charges.reduce((s: number, c: any) => s + Number(c.amount), 0);
-  const collected = data.payments.reduce((s: number, p: any) => s + Number(p.amount), 0);
+  const occupiedUnitIds = data.leases.filter((l: any) => l.status === "active").map((l: any) => l.unit_id);
+  const monthlyRevenue = data.leases
+    .filter((l: any) => l.status === "active")
+    .reduce((s: number, l: any) => s + Number(l.monthly_rent || 0), 0);
+
+  const revenueByMonth = data.charges
+    .filter((c: any) => c.status === "paid")
+    .reduce((acc: any, c: any) => {
+      const m = String(c.due_date).slice(0, 7);
+      acc[m] = (acc[m] || 0) + Number(c.amount);
+      return acc;
+    }, {});
+  const revenueData = Object.entries(revenueByMonth).map(([month, total]) => ({ month, total }));
 
   const occupancyData = [
-    { name: "Occupied", value: occupied },
-    { name: "Vacant", value: vacant }
+    { name: "Occupied", value: occupiedUnitIds.length },
+    { name: "Vacant", value: Math.max(data.units.length - occupiedUnitIds.length, 0) }
   ];
-  const COLORS = ["#4f46e5", "#e5e7eb"];
 
-  return (
-    <div>
-      <h1 className="text-3xl font-bold mb-6">Dashboard</h1>
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <StatCard label="Properties" value={data.properties.length} />
-        <StatCard label="Units" value={data.units.length} />
-        <StatCard label="Active Leases" value={data.leases.filter((l: any) => l.status === "active").length} />
-        <StatCard label="Open Maintenance" value={data.maintenance.filter((m: any) => m.status === "open").length} />
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        <div className="bg-white p-6 rounded-xl">
-          <h3 className="font-semibold mb-4">Occupancy</h3>
-          <ResponsiveContainer width="100%" height={250}>
-            <PieChart>
-              <Pie data={occupancyData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} dataKey="value">
-                {occupancyData.map((_, i) => <Cell key={i} fill={COLORS[i]} />)}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="bg-white p-6 rounded-xl">
-          <h3 className="font-semibold mb-4">Revenue</h3>
-          <div className="space-y-2">
-            <div className="flex justify-between"><span>Total Charged:</span><b>${totalRent.toLocaleString()}</b></div>
-            <div className="flex justify-between"><span>Collected:</span><b className="text-green-600">${collected.toLocaleString()}</b></div>
-            <div className="flex justify-between"><span>Outstanding:</span><b className="text-red-600">${(totalRent - collected).toLocaleString()}</b></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PropertiesTab({ data, reload }: any) {
-  const supabase = createClient();
-  async function createProperty(e: React.FormEvent<HTMLFormElement>) {
+  async function addProperty(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     const { data: { user } } = await supabase.auth.getUser();
     const { data: membership } = await supabase.from("org_members").select("org_id").eq("user_id", user!.id).single();
     await supabase.from("properties").insert({
-      org_id: membership.org_id, name: fd.get("name"), address: fd.get("address"),
-      city: fd.get("city"), country: fd.get("country")
+      org_id: membership.org_id,
+      name: fd.get("name") as string,
+      address: fd.get("address") as string
     });
-    reload();
+    load();
     (e.target as HTMLFormElement).reset();
   }
 
-  async function createUnit(e: React.FormEvent<HTMLFormElement>) {
+  async function addUnit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     const { data: { user } } = await supabase.auth.getUser();
     const { data: membership } = await supabase.from("org_members").select("org_id").eq("user_id", user!.id).single();
     await supabase.from("units").insert({
-      org_id: membership.org_id, property_id: fd.get("property_id"), name: fd.get("name"),
-      rent_amount: Number(fd.get("rent_amount")), deposit_amount: Number(fd.get("deposit_amount") || 0),
-      bedrooms: Number(fd.get("bedrooms") || 0)
+      org_id: membership.org_id,
+      property_id: fd.get("property_id") as string,
+      name: fd.get("name") as string,
+      monthly_rent: Number(fd.get("monthly_rent"))
     });
-    reload();
+    load();
     (e.target as HTMLFormElement).reset();
   }
-
-  return (
-    <div>
-      <h1 className="text-3xl font-bold mb-6">Properties & Units</h1>
-      <div className="grid grid-cols-2 gap-6 mb-6">
-        <form onSubmit={createProperty} className="bg-white p-6 rounded-xl">
-          <h3 className="font-semibold mb-4">Add Property</h3>
-          <input name="name" placeholder="Property name" required className="w-full p-2 border rounded mb-2" />
-          <input name="address" placeholder="Address" className="w-full p-2 border rounded mb-2" />
-          <input name="city" placeholder="City" className="w-full p-2 border rounded mb-2" />
-          <input name="country" placeholder="Country" className="w-full p-2 border rounded mb-2" />
-          <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Add Property</button>
-        </form>
-
-        <form onSubmit={createUnit} className="bg-white p-6 rounded-xl">
-          <h3 className="font-semibold mb-4">Add Unit</h3>
-          <select name="property_id" required className="w-full p-2 border rounded mb-2">
-            <option value="">Select property</option>
-            {data.properties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-          <input name="name" placeholder="Unit name (e.g., Unit 3A)" required className="w-full p-2 border rounded mb-2" />
-          <input name="rent_amount" type="number" placeholder="Monthly rent" required className="w-full p-2 border rounded mb-2" />
-          <input name="deposit_amount" type="number" placeholder="Deposit" className="w-full p-2 border rounded mb-2" />
-          <input name="bedrooms" type="number" placeholder="Bedrooms" className="w-full p-2 border rounded mb-2" />
-          <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Add Unit</button>
-        </form>
-      </div>
-
-      <div className="bg-white p-6 rounded-xl">
-        <h3 className="font-semibold mb-4">All Units</h3>
-        <table className="w-full text-sm">
-          <thead><tr className="border-b">
-            <th className="text-left py-2">Property</th><th className="text-left">Unit</th>
-            <th className="text-left">Rent</th><th className="text-left">Status</th>
-          </tr></thead>
-          <tbody>
-            {data.units.map((u: any) => {
-              const p = data.properties.find((p: any) => p.id === u.property_id);
-              return (
-                <tr key={u.id} className="border-b">
-                  <td className="py-2">{p?.name}</td><td>{u.name}</td>
-                  <td>${u.rent_amount}</td>
-                  <td><span className={`px-2 py-1 rounded text-xs ${u.status === "occupied" ? "bg-green-100 text-green-700" : "bg-gray-100"}`}>{u.status}</span></td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function TenantsTab({ data, reload }: any) {
-  // Similar pattern — invite tenant, link to unit
-  return (
-    <div>
-      <h1 className="text-3xl font-bold mb-6">Tenants</h1>
-      <div className="bg-white p-6 rounded-xl">
-        <p className="text-sm text-gray-600 mb-4">
-          To add a tenant, invite them via Admin → Team with role "tenant", then they'll appear here after first login.
-        </p>
-        <table className="w-full text-sm">
-          <thead><tr className="border-b"><th className="text-left py-2">Name</th><th>Email</th><th>Phone</th></tr></thead>
-          <tbody>
-            {data.tenants.map((t: any) => (
-              <tr key={t.id} className="border-b">
-                <td className="py-2">{t.full_name}</td><td>{t.email}</td><td>{t.phone}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function LeasesTab({ data, reload }: any) {
-  const supabase = createClient();
 
   async function createLease(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     const { data: { user } } = await supabase.auth.getUser();
     const { data: membership } = await supabase.from("org_members").select("org_id").eq("user_id", user!.id).single();
-    const { data: lease } = await supabase.from("leases").insert({
-      org_id: membership.org_id, unit_id: fd.get("unit_id"), tenant_user_id: fd.get("tenant_id"),
-      start_date: fd.get("start_date"), end_date: fd.get("end_date"),
-      monthly_rent: Number(fd.get("monthly_rent")), security_deposit: Number(fd.get("deposit") || 0)
+
+    const { data: lease, error } = await supabase.from("leases").insert({
+      org_id: membership.org_id,
+      unit_id: fd.get("unit_id") as string,
+      tenant_user_id: fd.get("tenant_user_id") as string,
+      start_date: fd.get("start_date") as string,
+      end_date: fd.get("end_date") as string,
+      monthly_rent: Number(fd.get("monthly_rent")),
+      security_deposit: Number(fd.get("security_deposit") || 0),
+      status: "active"
     }).select().single();
 
-    await generateRentSchedule(lease.id);
-    reload();
+    if (!error && lease) await generateRentSchedule(lease.id);
+    alert(error ? error.message : "Lease created + rent schedule generated!");
+    load();
   }
+
+  async function setMaintenanceStatus(id: string, status: string) {
+    await supabase.from("maintenance_requests").update({ status }).eq("id", id);
+    load();
+  }
+
+  async function sendAI(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!aiMsg.trim()) return;
+    setAiBusy(true);
+    await askAI(aiMsg);
+    setAiMsg("");
+    setAiBusy(false);
+    load();
+  }
+
+  const tenants = data.members.filter((m: any) => m.role === "tenant");
 
   return (
     <div>
-      <h1 className="text-3xl font-bold mb-6">Leases</h1>
-      <form onSubmit={createLease} className="bg-white p-6 rounded-xl mb-6">
-        <h3 className="font-semibold mb-4">Create Lease</h3>
-        <div className="grid grid-cols-2 gap-3">
-          <select name="unit_id" required className="p-2 border rounded">
-            <option value="">Select unit</option>
-            {data.units.map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
-          </select>
-          <select name="tenant_id" required className="p-2 border rounded">
-            <option value="">Select tenant</option>
-            {data.tenants.map((t: any) => <option key={t.id} value={t.id}>{t.full_name}</option>)}
-          </select>
-          <input name="start_date" type="date" required className="p-2 border rounded" />
-          <input name="end_date" type="date" required className="p-2 border rounded" />
-          <input name="monthly_rent" type="number" placeholder="Monthly rent" required className="p-2 border rounded" />
-          <input name="deposit" type="number" placeholder="Deposit" className="p-2 border rounded" />
-        </div>
-        <button className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg">Create Lease & Generate Schedule</button>
-      </form>
+      <h1 className="text-3xl font-bold mb-6">Manager Console</h1>
 
-      <div className="bg-white p-6 rounded-xl">
-        {data.leases.map((l: any) => (
-          <div key={l.id} className="border-b py-3">
-            <div className="flex justify-between">
-              <div>
-                <b>Lease #{l.id.slice(0, 8)}</b>
-                <div className="text-sm text-gray-500">{l.start_date} → {l.end_date} | ${l.monthly_rent}/mo</div>
+      {tab === "dashboard" && (
+        <div>
+          <div className="grid grid-cols-4 gap-4 mb-6">
+            <Stat label="Properties" value={data.properties.length} />
+            <Stat label="Units" value={data.units.length} />
+            <Stat label="Occupied" value={`${occupiedUnitIds.length}/${data.units.length}`} />
+            <Stat label="Monthly Revenue" value={`$${monthlyRevenue}`} />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-white p-6 rounded-xl h-72">
+              <h3 className="font-semibold mb-4">Collected Rent</h3>
+              <ResponsiveContainer width="100%" height="80%">
+                <BarChart data={revenueData}>
+                  <XAxis dataKey="month" /><YAxis /><Tooltip />
+                  <Bar dataKey="total" fill="#4f46e5" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="bg-white p-6 rounded-xl h-72">
+              <h3 className="font-semibold mb-4">Occupancy</h3>
+              <ResponsiveContainer width="100%" height="80%">
+                <PieChart>
+                  <Pie data={occupancyData} dataKey="value" nameKey="name" outerRadius={80} label>
+                    <Cell fill="#22c55e" /><Cell fill="#ef4444" />
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "properties" && (
+        <div>
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <form onSubmit={addProperty} className="bg-white p-6 rounded-xl">
+              <h3 className="font-semibold mb-3">Add Property</h3>
+              <input name="name" placeholder="Property name" required className="w-full p-2 border rounded mb-2" />
+              <input name="address" placeholder="Address" required className="w-full p-2 border rounded mb-3" />
+              <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Add Property</button>
+            </form>
+
+            <form onSubmit={addUnit} className="bg-white p-6 rounded-xl">
+              <h3 className="font-semibold mb-3">Add Unit</h3>
+              <select name="property_id" required className="w-full p-2 border rounded mb-2">
+                <option value="">Choose property…</option>
+                {data.properties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <input name="name" placeholder="Unit name (e.g. A1)" required className="w-full p-2 border rounded mb-2" />
+              <input name="monthly_rent" type="number" placeholder="Monthly rent" required className="w-full p-2 border rounded mb-3" />
+              <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Add Unit</button>
+            </form>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            {data.properties.map((p: any) => (
+              <div key={p.id} className="bg-white p-6 rounded-xl">
+                <div className="flex justify-between">
+                  <h3 className="text-lg font-semibold">{p.name}</h3>
+                  <span className="text-sm text-gray-500">
+                    Caretaker: {p.caretaker_user_id ? memberName(p.caretaker_user_id) : "—"}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-500 mb-3">{p.address}</p>
+                <div className="space-y-1 mb-2">
+                  {(p.units || []).map((u: any) => (
+                    <div key={u.id} className="flex justify-between text-sm bg-gray-50 rounded px-2 py-1">
+                      <span>{u.name}</span>
+                      <span>${u.monthly_rent}/mo {occupiedUnitIds.includes(u.id) ? "• Occupied" : "• Vacant"}</span>
+                    </div>
+                  ))}
+                  {(p.units || []).length === 0 && <p className="text-sm text-gray-400">No units yet</p>}
+                </div>
+                <PropertyAccess propertyId={p.id} caretakerUserId={p.caretaker_user_id} />
               </div>
-              <div className="flex gap-2">
-                <FileUploader
-                  folder="leases"
-                  mode="document"
-                  onUploaded={async (meta) => {
-                    await uploadDocument(meta.file, "lease", l.id);
-                    reload();
-                  }}
-                />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tab === "tenants" && (
+        <div className="bg-white p-6 rounded-xl">
+          <h3 className="font-semibold mb-4">Tenants</h3>
+          <table className="w-full text-sm">
+            <thead><tr className="border-b text-left">
+              <th className="py-2">Name</th><th>Email</th><th>Status</th><th>Lease</th>
+            </tr></thead>
+            <tbody>
+              {tenants.map((m: any) => {
+                const lease = data.leases.find((l: any) => l.tenant_user_id === m.user_id && l.status === "active");
+                return (
+                  <tr key={m.user_id} className="border-b">
+                    <td className="py-2">{m.profiles?.full_name || "—"}</td>
+                    <td>{m.profiles?.email}</td>
+                    <td>{m.status}</td>
+                    <td>{lease ? `${lease.properties?.name} • ${lease.units?.name}` : "No active lease"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="text-xs text-gray-400 mt-3">Invite tenants from Admin Panel → Team.</p>
+        </div>
+      )}
+
+      {tab === "leases" && (
+        <div>
+          <form onSubmit={createLease} className="bg-white p-6 rounded-xl mb-6 grid grid-cols-3 gap-3">
+            <h3 className="col-span-3 font-semibold">Create Lease</h3>
+            <select name="tenant_user_id" required className="p-2 border rounded">
+              <option value="">Tenant…</option>
+              {tenants.map((m: any) => <option key={m.user_id} value={m.user_id}>{m.profiles?.email}</option>)}
+            </select>
+            <select name="unit_id" required className="p-2 border rounded">
+              <option value="">Unit…</option>
+              {data.units.map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+            <input name="monthly_rent" type="number" placeholder="Monthly rent" required className="p-2 border rounded" />
+            <input name="start_date" type="date" required className="p-2 border rounded" />
+            <input name="end_date" type="date" required className="p-2 border rounded" />
+            <input name="security_deposit" type="number" placeholder="Deposit" className="p-2 border rounded" />
+            <button className="col-span-3 px-4 py-2 bg-indigo-600 text-white rounded-lg">
+              Create Lease + Rent Schedule
+            </button>
+          </form>
+
+          <div className="space-y-3">
+            {data.leases.map((l: any) => (
+              <div key={l.id} className="bg-white p-6 rounded-xl">
+                <div className="flex justify-between mb-2">
+                  <b>{l.properties?.name} • {l.units?.name}</b>
+                  <span className="text-sm text-gray-500">{emailOf(l.tenant_user_id)}</span>
+                </div>
+                <p className="text-sm text-gray-600">
+                  {l.start_date} → {l.end_date} • ${l.monthly_rent}/mo • Deposit ${l.security_deposit}
+                </p>
+                <div className="flex gap-4 mt-2 text-sm">
+                  <span>{l.signed_by_tenant ? "✅ Tenant signed" : "⏳ Tenant signature pending"}</span>
+                  <span>{l.signed_by_manager ? "✅ Manager signed" : "⏳ Manager signature pending"}</span>
+                </div>
                 {!l.signed_by_manager && (
-                  <SignaturePad leaseId={l.id} role="manager" onSigned={reload} />
+                  <div className="mt-3 max-w-md">
+                    <SignaturePad leaseId={l.id} role="manager" onSigned={load} />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tab === "payments" && (
+        <div>
+          <div className="bg-white p-6 rounded-xl mb-6">
+            <h3 className="font-semibold mb-4">Rent Charges</h3>
+            <table className="w-full text-sm">
+              <thead><tr className="border-b text-left">
+                <th className="py-2">Tenant</th><th>Due</th><th>Amount</th><th>Status</th>
+              </tr></thead>
+              <tbody>
+                {data.charges.map((c: any) => (
+                  <tr key={c.id} className="border-b">
+                    <td className="py-2">{emailOf(c.tenant_user_id)}</td>
+                    <td>{c.due_date}</td>
+                    <td>${c.amount}</td>
+                    <td className={c.status === "paid" ? "text-green-600" : "text-yellow-600"}>{c.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl">
+            <h3 className="font-semibold mb-4">Payments Received</h3>
+            <table className="w-full text-sm">
+              <thead><tr className="border-b text-left">
+                <th className="py-2">Payer</th><th>Amount</th><th>Status</th>
+              </tr></thead>
+              <tbody>
+                {data.payments.map((p: any) => (
+                  <tr key={p.id} className="border-b">
+                    <td className="py-2">{emailOf(p.payer_user_id)}</td>
+                    <td>${p.amount}</td>
+                    <td>{p.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "maintenance" && (
+        <div className="space-y-3">
+          {data.maintenance.map((m: any) => (
+            <div key={m.id} className="bg-white p-6 rounded-xl">
+              <div className="flex justify-between">
+                <b>{m.title}</b>
+                <span className={`text-xs px-2 py-1 rounded ${
+                  m.status === "completed" ? "bg-green-100" : m.status === "in_progress" ? "bg-blue-100" : "bg-yellow-100"
+                }`}>{m.status}</span>
+              </div>
+              <p className="text-sm text-gray-600 mt-1">{m.description}</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Priority: {m.priority} • Reported by: {emailOf(m.reporter_user_id)}
+              </p>
+              {(m.photos || []).length > 0 && (
+                <div className="flex gap-2 mt-2">
+                  {m.photos.map((ph: any, i: number) => (
+                    <a key={i} href={ph.signedUrl} target="_blank" className="text-indigo-600 text-xs underline">
+                      Photo {i + 1}
+                    </a>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2 mt-3">
+                {m.status !== "in_progress" && m.status !== "completed" && (
+                  <button onClick={() => setMaintenanceStatus(m.id, "in_progress")}
+                    className="px-3 py-1 bg-blue-600 text-white rounded text-sm">Start Work</button>
+                )}
+                {m.status !== "completed" && (
+                  <button onClick={() => setMaintenanceStatus(m.id, "completed")}
+                    className="px-3 py-1 bg-green-600 text-white rounded text-sm">Mark Completed</button>
                 )}
               </div>
             </div>
-            <div className="text-xs mt-1">
-              Signed: Manager {l.signed_by_manager ? "✓" : "✗"} | Tenant {l.signed_by_tenant ? "✓" : "✗"}
-            </div>
+          ))}
+          {data.maintenance.length === 0 && <p className="text-gray-400">No maintenance requests.</p>}
+        </div>
+      )}
+
+      {tab === "reports" && (
+        <div className="grid grid-cols-2 gap-4">
+          <div className="bg-white p-6 rounded-xl h-80">
+            <h3 className="font-semibold mb-4">Revenue (paid rent)</h3>
+            <ResponsiveContainer width="100%" height="80%">
+              <BarChart data={revenueData}>
+                <XAxis dataKey="month" /><YAxis /><Tooltip />
+                <Bar dataKey="total" fill="#4f46e5" />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function PaymentsTab({ data }: any) {
-  return (
-    <div>
-      <h1 className="text-3xl font-bold mb-6">Payments & Invoices</h1>
-      <div className="grid grid-cols-2 gap-6">
-        <div className="bg-white p-6 rounded-xl">
-          <h3 className="font-semibold mb-4">Rent Charges</h3>
-          {data.charges.slice(0, 20).map((c: any) => (
-            <div key={c.id} className="border-b py-2 flex justify-between text-sm">
-              <div>
-                <div>{c.due_date}</div>
-                <div className="text-xs text-gray-500">Amount: ${c.amount} | Paid: ${c.amount_paid}</div>
-              </div>
-              <span className={`text-xs px-2 py-1 rounded ${c.status === "paid" ? "bg-green-100" : "bg-yellow-100"}`}>
-                {c.status}
-              </span>
-            </div>
-          ))}
-        </div>
-        <div className="bg-white p-6 rounded-xl">
-          <h3 className="font-semibold mb-4">Payments Received</h3>
-          {data.payments.map((p: any) => (
-            <div key={p.id} className="border-b py-2 text-sm">
-              <div className="flex justify-between">
-                <span>${p.amount}</span>
-                <span className={p.status === "succeeded" ? "text-green-600" : "text-yellow-600"}>{p.status}</span>
-              </div>
-              {p.receipt_url && <a href={p.receipt_url} className="text-indigo-600 text-xs">Download receipt</a>}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MaintenanceTab({ data, reload }: any) {
-  return (
-    <div>
-      <h1 className="text-3xl font-bold mb-6">Maintenance</h1>
-      <div className="space-y-3">
-        {data.maintenance.map((m: any) => (
-          <div key={m.id} className="bg-white p-4 rounded-xl">
-            <div className="flex justify-between mb-2">
-              <div>
-                <b>{m.title}</b>
-                <span className={`ml-2 text-xs px-2 py-1 rounded ${
-                  m.priority === "high" ? "bg-red-100 text-red-700" :
-                  m.priority === "emergency" ? "bg-red-600 text-white" : "bg-gray-100"
-                }`}>{m.priority}</span>
-              </div>
-              <span className={`text-xs px-2 py-1 rounded ${m.status === "completed" ? "bg-green-100" : "bg-yellow-100"}`}>
-                {m.status}
-              </span>
-            </div>
-            <p className="text-sm text-gray-600">{m.description}</p>
-            {m.photos?.length > 0 && (
-              <div className="flex gap-2 mt-2">
-                {m.photos.map((p: any, i: number) => (
-                  <img key={i} src={p.signedUrl} className="w-20 h-20 rounded object-cover" />
-                ))}
-              </div>
-            )}
+          <div className="bg-white p-6 rounded-xl h-80">
+            <h3 className="font-semibold mb-4">Occupancy</h3>
+            <ResponsiveContainer width="100%" height="80%">
+              <PieChart>
+                <Pie data={occupancyData} dataKey="value" nameKey="name" outerRadius={100} label>
+                  <Cell fill="#22c55e" /><Cell fill="#ef4444" />
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
           </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ReportsTab({ data }: any) {
-  const revenueByMonth: Record<string, number> = {};
-  data.payments.forEach((p: any) => {
-    const month = p.paid_at ? new Date(p.paid_at).toLocaleString("default", { month: "short" }) : "Pending";
-    revenueByMonth[month] = (revenueByMonth[month] || 0) + Number(p.amount);
-  });
-
-  const chartData = Object.entries(revenueByMonth).map(([month, amount]) => ({ month, amount }));
-
-  return (
-    <div>
-      <h1 className="text-3xl font-bold mb-6">Advanced Reports</h1>
-      <div className="grid grid-cols-3 gap-4 mb-6">
-        <StatCard label="Total Revenue" value={`$${data.payments.reduce((s: number, p: any) => s + Number(p.amount), 0).toLocaleString()}`} />
-        <StatCard label="Outstanding" value={`$${data.charges.reduce((s: number, c: any) => s + (Number(c.amount) - Number(c.amount_paid)), 0).toLocaleString()}`} />
-        <StatCard label="Avg Rent" value={`$${Math.round(data.units.reduce((s: number, u: any) => s + Number(u.rent_amount), 0) / (data.units.length || 1))}`} />
-      </div>
-      <div className="bg-white p-6 rounded-xl">
-        <h3 className="font-semibold mb-4">Revenue Over Time</h3>
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="month" /><YAxis /><Tooltip />
-            <Bar dataKey="amount" fill="#4f46e5" />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-function AITab() {
-  const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  async function send() {
-    if (!input.trim()) return;
-    const userMsg = input;
-    setInput("");
-    setMessages(m => [...m, { role: "user", content: userMsg }]);
-    setLoading(true);
-    const reply = await askAI(userMsg);
-    setMessages(m => [...m, { role: "assistant", content: reply! }]);
-    setLoading(false);
-  }
-
-  return (
-    <div>
-      <h1 className="text-3xl font-bold mb-6">AI Assistant</h1>
-      <div className="bg-white p-6 rounded-xl h-[600px] flex flex-col">
-        <div className="flex-1 overflow-y-auto mb-4 space-y-3">
-          {messages.map((m, i) => (
-            <div key={i} className={`p-3 rounded-lg max-w-[80%] ${
-              m.role === "user" ? "bg-indigo-600 text-white ml-auto" : "bg-gray-100"
-            }`}>
-              {m.content}
-            </div>
-          ))}
-          {loading && <div className="bg-gray-100 p-3 rounded-lg max-w-[80%]">Thinking...</div>}
         </div>
-        <div className="flex gap-2">
-          <input value={input} onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && send()}
-            placeholder="Ask about tenants, leases, maintenance..."
-            className="flex-1 p-3 border rounded-lg" />
-          <button onClick={send} disabled={loading} className="px-6 bg-indigo-600 text-white rounded-lg">Send</button>
+      )}
+
+      {tab === "ai" && (
+        <div className="bg-white p-6 rounded-xl max-w-2xl">
+          <h3 className="font-semibold mb-4">AI Assistant</h3>
+          <div className="space-y-2 mb-4 max-h-96 overflow-auto">
+            {data.ai.map((m: any) => (
+              <div key={m.id} className={`p-3 rounded-lg text-sm ${m.role === "user" ? "bg-indigo-50" : "bg-gray-100"}`}>
+                <b className="block text-xs text-gray-500 mb-1">{m.role === "user" ? "You" : "AI"}</b>
+                {m.content}
+              </div>
+            ))}
+          </div>
+          <form onSubmit={sendAI} className="flex gap-2">
+            <input value={aiMsg} onChange={e => setAiMsg(e.target.value)}
+              placeholder="Ask about your portfolio…" className="flex-1 p-3 border rounded-lg" />
+            <button disabled={aiBusy} className="px-5 py-3 bg-indigo-600 text-white rounded-lg">
+              {aiBusy ? "Thinking…" : "Send"}
+            </button>
+          </form>
         </div>
-      </div>
+      )}
     </div>
   );
 }
 
-function StatCard({ label, value }: any) {
+function Stat({ label, value }: any) {
   return (
     <div className="bg-white p-6 rounded-xl">
       <div className="text-sm text-gray-500">{label}</div>
