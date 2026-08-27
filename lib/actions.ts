@@ -326,3 +326,48 @@ export async function addMaintenancePhoto(requestId: string, file: File) {
   const photos = [...(existing.photos || []), { path, signedUrl, uploaded_at: new Date().toISOString() }];
   await supabase.from("maintenance_requests").update({ photos }).eq("id", requestId);
 }
+
+
+export async function assignCaretaker(propertyId: string, userId: string | null) {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const admin = createServiceClient();
+
+  const { data: membership } = await admin
+    .from("org_members").select("role").eq("user_id", user!.id).eq("status", "active").single();
+  if (!membership || !["owner_admin", "manager"].includes(membership.role)) {
+    throw new Error("Not authorized to assign caretakers.");
+  }
+
+  const { error } = await admin.from("properties").update({ caretaker_user_id: userId }).eq("id", propertyId);
+  if (error) throw error;
+}
+
+export async function addCoOwner(propertyId: string, userId: string) {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const admin = createServiceClient();
+
+  const { data: membership } = await admin
+    .from("org_members").select("role").eq("user_id", user!.id).eq("status", "active").single();
+  if (!membership || !["owner_admin", "owner", "manager"].includes(membership.role)) {
+    throw new Error("Not authorized to add co-owners.");
+  }
+
+  const { error } = await admin.from("property_owners").insert({ property_id: propertyId, user_id: userId });
+  if (error) throw new Error(error.message);
+}
+
+export async function removeCoOwner(propertyId: string, userId: string) {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const admin = createServiceClient();
+
+  const { data: membership } = await admin
+    .from("org_members").select("role").eq("user_id", user!.id).eq("status", "active").single();
+  if (!membership || !["owner_admin", "manager"].includes(membership.role)) {
+    throw new Error("Not authorized to remove co-owners.");
+  }
+
+  await admin.from("property_owners").delete().eq("property_id", propertyId).eq("user_id", userId);
+}
