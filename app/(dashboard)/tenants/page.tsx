@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
-import { payRent, createMaintenanceRequest, addMaintenancePhoto, saveSignature } from "@/lib/actions";
+import { payRent, createMaintenanceRequest, addMaintenancePhoto } from "@/lib/actions";
 import { loadStripe } from "@stripe/stripe-js";
 import SignaturePad from "@/components/SignaturePad";
 import FileUploader from "@/components/FileUploader";
@@ -10,27 +10,40 @@ const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!
 
 export default function TenantPortal() {
   const supabase = createClient();
-  const [data, setData] = useState<any>({ lease: null, charges: [], payments: [], maintenance: [], units: [], properties: [] });
+  const [data, setData] = useState<any>({ lease: null, charges: [], payments: [], maintenance: [] });
   const [tab, setTab] = useState("home");
 
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
-    const { data: lease } = await supabase.from("leases").select("*, units(*), properties(*)")
-      .eq("tenant_user_id", user!.id).eq("status", "active").single();
+
+    // FIXED: fetch ALL active leases and take the newest one.
+    // (.single() crashes when there are 0 or 2+ leases → caused "No active lease")
+    const { data: leases } = await supabase
+      .from("leases")
+      .select("*, units(*), properties(*)")
+      .eq("tenant_user_id", user!.id)
+      .eq("status", "active")
+      .order("start_date", { ascending: false });
+
+    const lease = leases && leases.length > 0 ? leases[0] : null;
 
     const [charges, payments, maintenance] = await Promise.all([
-      supabase.from("rent_charges").select("*").eq("tenant_user_id", user!.id),
+      supabase.from("rent_charges").select("*").eq("tenant_user_id", user!.id).order("due_date"),
       supabase.from("payments").select("*").eq("payer_user_id", user!.id),
-      supabase.from("maintenance_requests").select("*").eq("reporter_user_id", user!.id),
+      supabase.from("maintenance_requests").select("*").eq("reporter_user_id", user!.id)
     ]);
 
     setData({
-      lease, charges: charges.data || [], payments: payments.data || [],
-      maintenance: maintenance.data || [], units: lease ? [lease.units] : [], properties: lease ? [lease.properties] : []
+      lease,
+      charges: charges.data || [],
+      payments: payments.data || [],
+      maintenance: maintenance.data || []
     });
   }
 
   useEffect(() => { load(); }, []);
+
+  const isIndefinite = data.lease?.lease_type === "indefinite";
 
   async function handlePay(chargeId: string, amount: number) {
     const { clientSecret } = await payRent(chargeId, amount);
@@ -44,12 +57,8 @@ export default function TenantPortal() {
       payment_method: { card: cardElement }
     });
 
-    if (error) {
-      alert("Payment error: " + error.message);
-    } else {
-      alert("Payment successful!");
-      load();
-    }
+    if (error) alert("Payment error: " + error.message);
+    else { alert("Payment successful!"); load(); }
   }
 
   return (
@@ -69,14 +78,27 @@ export default function TenantPortal() {
             <h2 className="font-semibold mb-2">My Home</h2>
             <p>{data.lease?.units?.name || "No active lease"}</p>
             <p className="text-sm text-gray-500">{data.lease?.properties?.name}</p>
+            {data.lease && (
+              <span className={`inline-block mt-2 text-xs px-2 py-1 rounded ${
+                isIndefinite ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"
+              }`}>
+                {isIndefinite ? "Indefinite / Month-to-Month" : "Fixed Period Lease"}
+              </span>
+            )}
           </div>
           <div className="bg-white p-6 rounded-xl">
             <h2 className="font-semibold mb-2">Next Payment Due</h2>
-            {data.charges.find((c: any) => c.status !== "paid") && (
+            {data.charges.find((c: any) => c.status !== "paid") ? (
               <>
                 <p className="text-2xl font-bold">${data.charges.find((c: any) => c.status !== "paid").amount}</p>
                 <p className="text-sm text-gray-500">Due {data.charges.find((c: any) => c.status !== "paid").due_date}</p>
               </>
+            ) : (
+              <p className="text-sm text-gray-500">
+                {isIndefinite
+                  ? "No upcoming charges yet — your manager will add them."
+                  : "All paid up! 🎉"}
+              </p>
             )}
           </div>
         </div>
@@ -86,8 +108,9 @@ export default function TenantPortal() {
         <div className="bg-white p-6 rounded-xl">
           <h2 className="text-xl font-semibold mb-4">My Lease</h2>
           <div className="space-y-2 text-sm">
+            <p><b>Type:</b> {isIndefinite ? "Indefinite (no fixed end date)" : "Fixed Period"}</p>
             <p><b>Start:</b> {data.lease.start_date}</p>
-            <p><b>End:</b> {data.lease.end_date}</p>
+            <p><b>End:</b> {isIndefinite ? "No end date" : data.lease.end_date}</p>
             <p><b>Monthly Rent:</b> ${data.lease.monthly_rent}</p>
             <p><b>Deposit:</b> ${data.lease.security_deposit}</p>
           </div>
@@ -101,25 +124,39 @@ export default function TenantPortal() {
         </div>
       )}
 
+      {tab === "lease" && !data.lease && (
+        <div className="bg-white p-6 rounded-xl">
+          <p className="text-gray-500">No active lease yet.</p>
+        </div>
+      )}
+
       {tab === "payments" && (
         <div className="bg-white p-6 rounded-xl">
           <h2 className="text-xl font-semibold mb-4">My Rent Schedule</h2>
-          {data.charges.map((c: any) => (
-            <div key={c.id} className="border-b py-3 flex justify-between items-center">
-              <div>
-                <div className="font-semibold">{c.due_date}</div>
-                <div className="text-sm text-gray-500">Amount: ${c.amount}</div>
+          {data.charges.length === 0 ? (
+            <p className="text-sm text-gray-500">
+              {isIndefinite
+                ? "Your lease is indefinite — rent charges will appear here when your manager adds them."
+                : "No rent charges yet."}
+            </p>
+          ) : (
+            data.charges.map((c: any) => (
+              <div key={c.id} className="border-b py-3 flex justify-between items-center">
+                <div>
+                  <div className="font-semibold">{c.due_date}</div>
+                  <div className="text-sm text-gray-500">Amount: ${c.amount}</div>
+                </div>
+                {c.status === "paid" ? (
+                  <span className="px-3 py-1 bg-green-100 text-green-700 rounded">Paid</span>
+                ) : (
+                  <button onClick={() => handlePay(c.id, Number(c.amount))}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg">
+                    Pay ${c.amount}
+                  </button>
+                )}
               </div>
-              {c.status === "paid" ? (
-                <span className="px-3 py-1 bg-green-100 text-green-700 rounded">Paid</span>
-              ) : (
-                <button onClick={() => handlePay(c.id, Number(c.amount))}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg">
-                  Pay ${c.amount}
-                </button>
-              )}
-            </div>
-          ))}
+            ))
+          )}
         </div>
       )}
 
