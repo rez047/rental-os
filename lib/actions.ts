@@ -12,7 +12,13 @@ export async function signUp(email: string, password: string, fullName: string, 
     password,
     options: { data: { full_name: fullName } }
   });
-  if (error) throw error;
+
+  if (error) {
+    if (error.message.toLowerCase().includes("already")) {
+      return { error: "This email already has an account. Please log in instead." };
+    }
+    return { error: error.message };
+  }
 
   const admin = createServiceClient();
 
@@ -28,12 +34,12 @@ export async function signUp(email: string, password: string, fullName: string, 
       .from("org_members")
       .update({ user_id: data.user!.id, status: "active" })
       .eq("id", invite.id);
-      
+
     return { org: null, invited: true };
   }
 
   const slug = orgName.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-" + Date.now();
-  
+
   const { data: org, error: orgError } = await admin
     .from("organizations")
     .insert({ name: orgName, slug })
@@ -46,7 +52,7 @@ export async function signUp(email: string, password: string, fullName: string, 
     org_id: org.id,
     user_id: data.user!.id,
     role: "owner_admin",
-    status: "active" 
+    status: "active"
   });
 
   try {
@@ -84,7 +90,7 @@ export async function createStripeCheckout(orgId: string, priceId: string) {
   const session = await stripe.checkout.sessions.create({
     customer: org?.stripe_customer_id || undefined,
     mode: "subscription",
-    payment_method_types:["card"],
+    payment_method_types: ["card"],
     line_items: [{ price: priceId, quantity: 1 }],
     success_url: `${process.env.NEXT_PUBLIC_APP_URL}/admin?subscribed=true`,
     cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/admin`,
@@ -222,7 +228,7 @@ export async function inviteMember(email: string, role: string) {
 
   await admin.from("org_members").insert({
     org_id: orgId,
-    user_id: null, 
+    user_id: null,
     role,
     status: "invited",
     invite_email: email.toLowerCase()
@@ -287,7 +293,7 @@ export async function getActiveOrgId(): Promise<string> {
     .eq("user_id", user!.id)
     .eq("status", "active")
     .single();
-    
+
   if (!membership) throw new Error("No active organization found for user.");
   return membership.org_id;
 }
