@@ -18,6 +18,23 @@ export default function TenantPortal() {
   );
 }
 
+function addMonths(d: Date, n: number) {
+  const x = new Date(d);
+  x.setMonth(x.getMonth() + n);
+  return x;
+}
+
+function leaseMonthCount(lease: any) {
+  if (!lease) return 0;
+  if (lease.lease_type === "indefinite") return 1; // current month only
+  const start = new Date(lease.start_date);
+  const end = new Date(lease.end_date);
+  let count = 0;
+  let cur = new Date(start);
+  while (cur <= end && count < 120) { count++; cur = addMonths(cur, 1); }
+  return count;
+}
+
 function TenantDashboard() {
   const supabase = createClient();
   const params = useSearchParams();
@@ -25,6 +42,7 @@ function TenantDashboard() {
   const [data, setData] = useState<any>({ leases: [], charges: [], payments: [], maintenance: [], evictedLease: null });
   const [selectedLeaseId, setSelectedLeaseId] = useState("");
   const [mpesaPhone, setMpesaPhone] = useState("");
+  const [customAmount, setCustomAmount] = useState("");
 
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
@@ -64,19 +82,39 @@ function TenantDashboard() {
   const leaseCharges = data.charges.filter((c: any) => c.lease_id === selectedLeaseId);
   const depositPaid = data.payments.some((p: any) => p.lease_id === selectedLeaseId && p.payment_type === "deposit" && p.status === "paid");
 
+  // Automatic rent calculation
+  const months = leaseMonthCount(selectedLease);
+  const rentTotal = months * Number(selectedLease?.monthly_rent || 0);
+  const deposit = Number(selectedLease?.security_deposit || 0);
+  const totalDue = rentTotal + deposit;
+  const paidTotal = data.payments
+    .filter((p: any) => p.lease_id === selectedLeaseId && p.status === "paid")
+    .reduce((s: number, p: any) => s + Number(p.amount), 0);
+  const balance = Math.max(totalDue - paidTotal, 0);
+
   async function handlePay(chargeId: string, amount: number) {
     if (!mpesaPhone) { alert("Please enter your M-Pesa phone number first."); return; }
     const result = await initiateMpesaPayment(mpesaPhone, amount, chargeId, "rent", selectedLeaseId);
     alert(result.message);
-    setTimeout(load, 12000);
+    load();
   }
 
   async function handlePayDeposit() {
     if (!selectedLease) return;
     if (!mpesaPhone) { alert("Please enter your M-Pesa phone number first."); return; }
-    const result = await initiateMpesaPayment(mpesaPhone, Number(selectedLease.security_deposit), null, "deposit", selectedLease.id);
+    const result = await initiateMpesaPayment(mpesaPhone, deposit, null, "deposit", selectedLease.id);
     alert(result.message);
-    setTimeout(load, 12000);
+    load();
+  }
+
+  async function handleCustomPay() {
+    const amt = Number(customAmount);
+    if (!amt || amt <= 0) { alert("Enter a valid amount you want to pay."); return; }
+    if (!mpesaPhone) { alert("Please enter your M-Pesa phone number first."); return; }
+    const result = await initiateMpesaPayment(mpesaPhone, amt, null, "rent", selectedLeaseId);
+    alert(result.message);
+    setCustomAmount("");
+    load();
   }
 
   const getPaymentStatus = (charge: any) => {
@@ -91,7 +129,6 @@ function TenantDashboard() {
 
   return (
     <div>
-      {/* Eviction banner */}
       {data.evictedLease && (
         <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
           ⚠️ Your lease for <b>{data.evictedLease.properties?.name} • {data.evictedLease.units?.name}</b> has been terminated
@@ -181,11 +218,26 @@ function TenantDashboard() {
                   className="w-full p-2 border rounded" />
               </div>
 
-              {Number(selectedLease.security_deposit) > 0 && (
+              {/* NEW: Automatic rent calculation summary */}
+              <div className="bg-white p-6 rounded-xl">
+                <h3 className="font-semibold mb-3">Payment Summary — {selectedLease.units?.name}</h3>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>Lease type: <b>{selectedLease.lease_type === "indefinite" ? "Indefinite (current month only)" : `Fixed (${months} month${months === 1 ? "" : "s"})`}</b></div>
+                  <div>Monthly rent: <b>${selectedLease.monthly_rent}</b></div>
+                  <div>Rent total: <b>${rentTotal}</b></div>
+                  <div>Deposit: <b>${deposit}</b></div>
+                  <div>Total due (rent + deposit): <b>${totalDue}</b></div>
+                  <div>Total paid: <b className="text-green-600">${paidTotal}</b></div>
+                  <div className="col-span-2">Balance: <b className={balance > 0 ? "text-red-600" : "text-green-600"}>${balance}</b></div>
+                </div>
+              </div>
+
+              {/* Deposit row */}
+              {deposit > 0 && (
                 <div className="bg-white p-6 rounded-xl flex justify-between items-center">
                   <div>
                     <div className="font-semibold">Security Deposit</div>
-                    <div className="text-sm text-gray-500">${selectedLease.security_deposit}</div>
+                    <div className="text-sm text-gray-500">${deposit}</div>
                   </div>
                   {depositPaid ? (
                     <span className="px-3 py-1 bg-green-100 text-green-700 rounded">Paid</span>
@@ -198,6 +250,24 @@ function TenantDashboard() {
                 </div>
               )}
 
+              {/* NEW: Pay any amount (partial payment prompt) */}
+              <div className="bg-white p-6 rounded-xl">
+                <h3 className="font-semibold mb-2">Pay Any Amount (Partial Payment)</h3>
+                <p className="text-sm text-gray-500 mb-3">
+                  Don't have the full amount? Enter what you have — it will be applied to your oldest unpaid rent first.
+                </p>
+                <div className="flex gap-2">
+                  <input type="number" min="1" placeholder="Amount you have right now"
+                    value={customAmount} onChange={(e) => setCustomAmount(e.target.value)}
+                    className="flex-1 p-2 border rounded" />
+                  <button onClick={handleCustomPay} disabled={!mpesaPhone}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg disabled:bg-gray-300">
+                    Pay with M-Pesa
+                  </button>
+                </div>
+              </div>
+
+              {/* Rent schedule with colors */}
               <div className="bg-white p-6 rounded-xl">
                 <h3 className="font-semibold mb-4">Rent Schedule — {selectedLease.units?.name}</h3>
                 {leaseCharges.length === 0 ? (
@@ -313,6 +383,7 @@ function TenantDashboard() {
   );
 }
 
+/* ---------- Lease card (signature untouched, move-in fixed) ---------- */
 function LeaseCard({ lease, onSigned }: any) {
   const isIndefinite = lease.lease_type === "indefinite";
   const hasMedia = (lease.move_in_photos || []).length > 0 || (lease.move_in_videos || []).length > 0;
@@ -369,44 +440,76 @@ function LeaseCard({ lease, onSigned }: any) {
   );
 }
 
+/* ---------- FIXED Move-in form: native pickers, visible uploads, working save ---------- */
 function MoveInForm({ leaseId, onSaved }: any) {
-  const [photos, setPhotos] = useState<string[]>([]);
-  const [videos, setVideos] = useState<string[]>([]);
+  const [photos, setPhotos] = useState<any[]>([]);
+  const [videos, setVideos] = useState<any[]>([]);
+  const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
-  async function handleUpload(meta: any, kind: "photo" | "video") {
-    let path = meta?.path;
-    if (!path && meta?.file instanceof File) {
-      const res = await uploadLeaseMedia(meta.file, "leases");
-      path = res.path;
-    }
-    if (path) {
-      if (kind === "photo") setPhotos((p) => [...p, path]);
-      else setVideos((v) => [...v, path]);
+  async function uploadFiles(files: File[], kind: "photo" | "video") {
+    if (!files.length) return;
+    setBusy(true);
+    setError("");
+    try {
+      for (const f of files) {
+        const res = await uploadLeaseMedia(f, "leases");
+        if (kind === "photo") setPhotos((p) => [...p, { path: res.path, name: f.name }]);
+        else setVideos((v) => [...v, { path: res.path, name: f.name }]);
+      }
+    } catch (e: any) {
+      setError("Upload failed: " + (e?.message || e));
+    } finally {
+      setBusy(false);
     }
   }
 
   async function save() {
     setSaving(true);
-    await saveMoveInCondition(leaseId, photos, videos);
-    setSaving(false);
-    onSaved();
+    try {
+      await saveMoveInCondition(leaseId, photos.map((p) => p.path), videos.map((v) => v.path));
+      alert("Move-in condition saved!");
+      onSaved();
+    } catch (e: any) {
+      alert("Save failed: " + (e?.message || e));
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <div className="space-y-3">
       <p className="text-sm text-gray-600">Record the house condition with photos/videos for your records.</p>
+
       <div>
         <div className="text-sm font-semibold mb-1">Photos</div>
-        <FileUploader folder="leases" mode="image-video" onUploaded={(meta: any) => handleUpload(meta, "photo")} />
-        {photos.length > 0 && <div className="text-sm text-gray-600 mt-1">{photos.length} photo(s) ready</div>}
+        <input type="file" accept="image/*" multiple
+          onChange={(e) => uploadFiles(Array.from(e.target.files || []), "photo")}
+          className="text-sm" />
+        {photos.length > 0 && (
+          <ul className="mt-1 text-sm text-gray-600 list-disc ml-4">
+            {photos.map((p, i) => <li key={i}>✅ {p.name}</li>)}
+          </ul>
+        )}
       </div>
+
       <div>
         <div className="text-sm font-semibold mb-1">Videos (optional)</div>
-        <FileUploader folder="leases" mode="image-video" onUploaded={(meta: any) => handleUpload(meta, "video")} />
-        {videos.length > 0 && <div className="text-sm text-gray-600 mt-1">{videos.length} video(s) ready</div>}
+        <input type="file" accept="video/*" multiple
+          onChange={(e) => uploadFiles(Array.from(e.target.files || []), "video")}
+          className="text-sm" />
+        {videos.length > 0 && (
+          <ul className="mt-1 text-sm text-gray-600 list-disc ml-4">
+            {videos.map((v, i) => <li key={i}>✅ {v.name}</li>)}
+          </ul>
+        )}
       </div>
-      <button onClick={save} disabled={saving || (photos.length === 0 && videos.length === 0)}
+
+      {busy && <p className="text-sm text-indigo-600">Uploading…</p>}
+      {error && <p className="text-sm text-red-600">{error}</p>}
+
+      <button onClick={save} disabled={saving || busy || (photos.length === 0 && videos.length === 0)}
         className="px-4 py-2 bg-indigo-600 text-white rounded-lg disabled:bg-gray-300">
         {saving ? "Saving..." : "Save Move-in Condition"}
       </button>
