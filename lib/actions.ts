@@ -299,23 +299,6 @@ export async function getActiveOrgId(): Promise<string> {
   return membership.org_id;
 }
 
-export async function createMaintenanceRequest(data: {
-  unitId: string; propertyId: string; title: string; description: string; priority: string;
-}) {
-  const supabase = createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  const orgId = await getActiveOrgId();
-
-  await supabase.from("maintenance_requests").insert({
-    org_id: orgId,
-    unit_id: data.unitId,
-    property_id: data.propertyId,
-    reporter_user_id: user!.id,
-    title: data.title,
-    description: data.description,
-    priority: data.priority
-  });
-}
 
 export async function addMaintenancePhoto(requestId: string, file: File) {
   const supabase = createClient();
