@@ -40,7 +40,6 @@ function SignupForm() {
       const result = await signUp(form.email, form.password, form.fullName, form.orgName || "My Organization");
 
       if (result.invited) {
-        // Route based on invited role
         const dest =
           invitedRole === "tenant" ? "/tenant" :
           invitedRole === "vendor" ? "/vendor" :
@@ -113,14 +112,6 @@ function SignupForm() {
 
         <button disabled={loading} className="w-full py-3 bg-indigo-600 text-white rounded-lg font-semibold">
           {loading ? "Creating..." : invitedRole ? "Accept Invite & Create Account" : "Create Account"}
-        </button>
-      </form>
-    </div>
-  );
-}          />
-        ))}
-        <button disabled={loading} className="w-full py-3 bg-indigo-600 text-white rounded-lg font-semibold mt-2">
-          {loading ? "Creating..." : "Create Account"}
         </button>
       </form>
     </div>
