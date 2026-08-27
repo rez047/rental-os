@@ -51,7 +51,7 @@ function SignupForm() {
 
       if (result.invited) {
         const dest =
-          invitedRole === "tenant" ? "/tenant" :
+          invitedRole === "tenant" ? "/tenants" :
           invitedRole === "vendor" ? "/vendor" :
           invitedRole === "owner" ? "/owner" :
           invitedRole === "manager" ? "/manager" :
