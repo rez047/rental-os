@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
-import { addMaintenancePhoto, addCompletedPhoto, updateMaintenanceStatus } from "@/lib/actions";
+import { addCompletedPhoto, updateMaintenanceStatus } from "@/lib/actions";
 import FileUploader from "@/components/FileUploader";
+import MessagesPanel from "@/components/MessagesPanel";
 
 export default function VendorPortal() {
   const supabase = createClient();
@@ -29,8 +30,7 @@ export default function VendorPortal() {
   return (
     <div>
       <h1 className="text-3xl font-bold mb-6">Caretaker Portal</h1>
-      
-      {/* NEW: Tabs for my jobs vs completed */}
+
       <div className="flex gap-2 mb-6">
         <button onClick={() => setTab("my-jobs")}
           className={`px-4 py-2 rounded-lg ${tab === "my-jobs" ? "bg-indigo-600 text-white" : "bg-white"}`}>
@@ -39,6 +39,10 @@ export default function VendorPortal() {
         <button onClick={() => setTab("completed")}
           className={`px-4 py-2 rounded-lg ${tab === "completed" ? "bg-indigo-600 text-white" : "bg-white"}`}>
           Completed ({completedJobs.length})
+        </button>
+        <button onClick={() => setTab("messages")}
+          className={`px-4 py-2 rounded-lg ${tab === "messages" ? "bg-indigo-600 text-white" : "bg-white"}`}>
+          Messages
         </button>
       </div>
 
@@ -56,14 +60,13 @@ export default function VendorPortal() {
                 }`}>{j.status}</span>
               </div>
               <p className="text-sm text-gray-600 mt-1">{j.description}</p>
-              
-              {/* Issue Photos (from manager) */}
+
               {(j.issue_photos || []).length > 0 && (
                 <div className="mt-3">
                   <div className="text-xs font-semibold text-gray-500 mb-1">REFERENCE PHOTOS</div>
                   <div className="flex gap-2 flex-wrap">
-                    {j.issue_photos.map((ph: string, i: number) => (
-                      <a key={i} href={ph} target="_blank" className="text-indigo-600 text-xs underline">
+                    {j.issue_photos.map((ph: any, i: number) => (
+                      <a key={i} href={typeof ph === "string" ? ph : ph?.signedUrl} target="_blank" className="text-indigo-600 text-xs underline">
                         Photo {i + 1}
                       </a>
                     ))}
@@ -73,34 +76,31 @@ export default function VendorPortal() {
 
               <div className="flex gap-2 mt-3 flex-wrap items-center">
                 {j.status === "open" && (
-                  <button onClick={() => handleUpdateStatus(j.id, "in_progress")} 
+                  <button onClick={() => handleUpdateStatus(j.id, "in_progress")}
                     className="px-3 py-1 bg-blue-600 text-white rounded text-sm">Start Job</button>
                 )}
                 {j.status === "in_progress" && (
-                  <button onClick={() => handleUpdateStatus(j.id, "completed")} 
+                  <button onClick={() => handleUpdateStatus(j.id, "completed")}
                     className="px-3 py-1 bg-green-600 text-white rounded text-sm">Mark Complete</button>
                 )}
-                
-                {/* NEW: Upload completion photo */}
                 {j.status === "in_progress" && (
-                  <FileUploader 
-                    folder="vendor" 
+                  <FileUploader
+                    folder="vendor"
                     mode="image-video"
-                    onUploaded={async (meta) => { 
-                      await addCompletedPhoto(j.id, meta.file); 
+                    onUploaded={async (meta: any) => {
+                      await addCompletedPhoto(j.id, meta.file);
                       load();
-                    }} 
+                    }}
                   />
                 )}
               </div>
 
-              {/* NEW: Already uploaded completion photos */}
               {(j.completed_photos || []).length > 0 && (
                 <div className="mt-3">
                   <div className="text-xs font-semibold text-green-600 mb-1">YOUR COMPLETION PHOTOS</div>
                   <div className="flex gap-2 flex-wrap">
-                    {j.completed_photos.map((ph: string, i: number) => (
-                      <a key={i} href={ph} target="_blank" className="text-green-600 text-xs underline">
+                    {j.completed_photos.map((ph: any, i: number) => (
+                      <a key={i} href={typeof ph === "string" ? ph : ph?.signedUrl} target="_blank" className="text-green-600 text-xs underline">
                         Done {i + 1}
                       </a>
                     ))}
@@ -135,8 +135,8 @@ export default function VendorPortal() {
               {(j.completed_photos || []).length > 0 && (
                 <div className="mt-2">
                   <div className="flex gap-2 flex-wrap">
-                    {j.completed_photos.map((ph: string, i: number) => (
-                      <a key={i} href={ph} target="_blank" className="text-green-600 text-xs underline">
+                    {j.completed_photos.map((ph: any, i: number) => (
+                      <a key={i} href={typeof ph === "string" ? ph : ph?.signedUrl} target="_blank" className="text-green-600 text-xs underline">
                         Done {i + 1}
                       </a>
                     ))}
@@ -150,6 +150,8 @@ export default function VendorPortal() {
           )}
         </div>
       )}
+
+      {tab === "messages" && <MessagesPanel />}
     </div>
   );
 }
