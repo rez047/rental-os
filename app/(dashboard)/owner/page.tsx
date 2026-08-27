@@ -25,14 +25,14 @@ export default function OwnerPortal() {
       .eq("org_id", membership.org_id)
       .in("id", ownedIds.length ? ownedIds : ["00000000-0000-0000-0000-000000000000"]);
 
-    const props = properties.data || [];
+    const props = properties || []; // Fixed: properties is already the array
     const unitIds = props.flatMap((p: any) => (p.units || []).map((u: any) => u.id));
 
     const { data: leases } = await supabase
       .from("leases").select("*")
       .in("unit_id", unitIds.length ? unitIds : ["00000000-0000-0000-0000-000000000000"]);
 
-    const leaseIds = (leases.data || []).map((l: any) => l.id);
+    const leaseIds = (leases || []).map((l: any) => l.id);
 
     const { data: charges } = await supabase
       .from("rent_charges").select("*")
@@ -44,9 +44,9 @@ export default function OwnerPortal() {
 
     setData({
       properties: props,
-      leases: leases.data || [],
-      charges: charges.data || [],
-      payments: payments.data || []
+      leases: leases || [],
+      charges: charges || [],
+      payments: payments || []
     });
   }
 
