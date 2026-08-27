@@ -4,6 +4,7 @@ import { stripe } from "./stripe";
 import { openai } from "./openai";
 import { uploadPrivateFile } from "./storage";
 import { addMonths, format } from "date-fns";
+import { redirect } from "next/navigation";
 
 export async function signUp(email: string, password: string, fullName: string, orgName: string) {
   const supabase = createClient();
@@ -375,4 +376,12 @@ export async function createMaintenanceRequest(data: {
     issue_photos: data.issuePhotos || [],
     issue_videos: data.issueVideos || []
   });
+}
+
+
+
+export async function handleSignOut() {
+  const supabase = createClient();
+  await supabase.auth.signOut();
+  redirect("/login");
 }
