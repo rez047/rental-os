@@ -431,7 +431,7 @@ function ManagerDashboard() {
                 <div className="text-sm font-semibold mb-2">Issue Photos</div>
                 <FileUploader 
                   folder="maintenance" 
-                  mode="image" 
+                  mode="image-video" 
                   onUploaded={(meta) => setMaintenancePhotos([...maintenancePhotos, meta.file])}
                 />
                 {maintenancePhotos.length > 0 && (
@@ -442,7 +442,7 @@ function ManagerDashboard() {
                 <div className="text-sm font-semibold mb-2">Issue Videos (optional)</div>
                 <FileUploader 
                   folder="maintenance" 
-                  mode="video" 
+                  mode="image-video" 
                   onUploaded={(meta) => setMaintenanceVideos([...maintenanceVideos, meta.file])}
                 />
                 {maintenanceVideos.length > 0 && (
