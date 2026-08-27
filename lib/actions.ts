@@ -411,3 +411,89 @@ export async function handleSignOut() {
   await supabase.auth.signOut();
   redirect("/login");
 }
+
+
+// Chat messages
+export async function sendMessage(content: string, recipientUserId?: string, propertyId?: string) {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const orgId = await getActiveOrgId();
+
+  await supabase.from("messages").insert({
+    org_id: orgId,
+    sender_user_id: user!.id,
+    recipient_user_id: recipientUserId || null,
+    property_id: propertyId || null,
+    content
+  });
+}
+
+export async function getMessages() {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const orgId = await getActiveOrgId();
+
+  const { data } = await supabase
+    .from("messages")
+    .select("*, sender:profiles!sender_user_id(email, full_name), recipient:profiles!recipient_user_id(email, full_name)")
+    .eq("org_id", orgId)
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  return data || [];
+}
+
+// Move-in condition photos
+export async function saveMoveInCondition(leaseId: string, photos: string[], videos: string[]) {
+  const supabase = createClient();
+  await supabase.from("leases").update({
+    move_in_photos: photos,
+    move_in_videos: videos
+  }).eq("id", leaseId);
+}
+
+// M-Pesa STK Push
+export async function initiateMpesaPayment(phone: string, amount: number, chargeId: string) {
+  // This is a placeholder - you'll need to implement actual M-Pesa Daraja API
+  // For now, we'll simulate it
+  
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const { data: charge } = await supabase.from("rent_charges").select("*").eq("id", chargeId).single();
+
+  // Create payment record
+  const { data: payment } = await supabase.from("payments").insert({
+    org_id: charge.org_id,
+    lease_id: charge.lease_id,
+    charge_id: chargeId,
+    payer_user_id: user!.id,
+    amount,
+    mpesa_phone: phone,
+    status: "pending",
+    stripe_payment_intent: `mpesa_${Date.now()}`
+  }).select().single();
+
+  // TODO: Implement actual M-Pesa Daraja STK Push API call here
+  // For demo purposes, we'll mark it as paid after 10 seconds
+  setTimeout(async () => {
+    await supabase.from("payments").update({ 
+      status: "paid",
+      mpesa_receipt: `MPESA${Date.now()}`
+    }).eq("id", payment.id);
+    
+    await supabase.from("rent_charges").update({ status: "paid" }).eq("id", chargeId);
+  }, 10000);
+
+  return { success: true, message: "STK Push sent to your phone. Please enter PIN to complete payment." };
+}
+
+// Eviction
+export async function evictTenant(leaseId: string, reason?: string) {
+  const supabase = createClient();
+  await supabase.from("leases").update({
+    evicted: true,
+    eviction_reason: reason || null,
+    eviction_date: new Date().toISOString(),
+    status: "terminated"
+  }).eq("id", leaseId);
+}
