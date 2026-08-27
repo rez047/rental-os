@@ -31,7 +31,6 @@ function ManagerDashboard() {
   const [aiBusy, setAiBusy] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<any>(null);
   
-  // FIXED: Changed from string[] to any[] to accept both File and string objects from uploader
   const [maintenancePhotos, setMaintenancePhotos] = useState<any[]>([]);
   const [maintenanceVideos, setMaintenanceVideos] = useState<any[]>([]);
 
@@ -163,7 +162,10 @@ function ManagerDashboard() {
   }
 
   async function setMaintenanceStatus(id: string, status: string) {
-    await supabase.from("maintenance_requests").update({ status }).eq("id", id);
+    await supabase.from("maintenance_requests").update({ 
+      status,
+      ...(status === "completed" ? { completed_at: new Date().toISOString() } : {})
+    }).eq("id", id);
     load();
   }
 
@@ -177,15 +179,17 @@ function ManagerDashboard() {
     load();
   }
 
+  // UPDATED: Now supports caretaker assignment
   async function submitMaintenance(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     await createMaintenanceRequest({
-      unitId: fd.get("unit_id") as string,
+      unitId: (fd.get("unit_id") as string) || null,
       propertyId: fd.get("property_id") as string,
       title: fd.get("title") as string,
       description: fd.get("description") as string,
       priority: fd.get("priority") as string,
+      assignedVendorUserId: (fd.get("assigned_vendor_user_id") as string) || undefined,
       issuePhotos: maintenancePhotos,
       issueVideos: maintenanceVideos
     });
@@ -193,10 +197,11 @@ function ManagerDashboard() {
     setMaintenanceVideos([]);
     (e.target as HTMLFormElement).reset();
     load();
-    alert("Maintenance request submitted!");
+    alert("Task created!");
   }
 
   const tenants = data.members.filter((m: any) => m.role === "tenant");
+  const caretakers = data.members.filter((m: any) => m.role === "vendor");
 
   function handleUnitSelect(unitId: string) {
     const unit = data.units.find((u: any) => u.id === unitId);
@@ -407,20 +412,30 @@ function ManagerDashboard() {
 
       {tab === "maintenance" && (
         <div className="space-y-6">
+          {/* UPDATED: Now supports caretaker assignment */}
           <form onSubmit={submitMaintenance} className="bg-white p-6 rounded-xl">
-            <h3 className="font-semibold mb-4">Create Maintenance Request</h3>
+            <h3 className="font-semibold mb-4">Create Task / Request</h3>
             <div className="grid grid-cols-2 gap-3 mb-3">
               <select name="property_id" required className="p-2 border rounded">
                 <option value="">Property…</option>
                 {data.properties.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
-              <select name="unit_id" required className="p-2 border rounded">
-                <option value="">Unit…</option>
+              <select name="unit_id" className="p-2 border rounded">
+                <option value="">Unit (optional)…</option>
                 {data.units.map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
               </select>
             </div>
-            <input name="title" placeholder="Issue title" required className="w-full p-2 border rounded mb-2" />
-            <textarea name="description" placeholder="Describe the issue" rows={3} required className="w-full p-2 border rounded mb-2" />
+            {/* NEW: Caretaker assignment dropdown */}
+            <select name="assigned_vendor_user_id" className="w-full p-2 border rounded mb-3">
+              <option value="">Assign to Caretaker (optional)…</option>
+              {caretakers.map((v: any) => (
+                <option key={v.user_id} value={v.user_id}>
+                  {v.profiles?.full_name || v.profiles?.email}
+                </option>
+              ))}
+            </select>
+            <input name="title" placeholder="Task title" required className="w-full p-2 border rounded mb-2" />
+            <textarea name="description" placeholder="Describe the task" rows={3} required className="w-full p-2 border rounded mb-2" />
             <select name="priority" required className="w-full p-2 border rounded mb-3">
               <option value="low">Low Priority</option>
               <option value="medium">Medium Priority</option>
@@ -430,7 +445,7 @@ function ManagerDashboard() {
 
             <div className="space-y-3 mb-3">
               <div>
-                <div className="text-sm font-semibold mb-2">Issue Photos</div>
+                <div className="text-sm font-semibold mb-2">Reference Photos</div>
                 <FileUploader 
                   folder="maintenance" 
                   mode="image-video" 
@@ -441,7 +456,7 @@ function ManagerDashboard() {
                 )}
               </div>
               <div>
-                <div className="text-sm font-semibold mb-2">Issue Videos (optional)</div>
+                <div className="text-sm font-semibold mb-2">Reference Videos (optional)</div>
                 <FileUploader 
                   folder="maintenance" 
                   mode="image-video" 
@@ -453,43 +468,64 @@ function ManagerDashboard() {
               </div>
             </div>
 
-            <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Submit Request</button>
+            <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Create Task</button>
           </form>
 
           <div className="space-y-3">
-            {data.maintenance.map((m: any) => (
-              <div key={m.id} className="bg-white p-6 rounded-xl">
-                <div className="flex justify-between">
-                  <b>{m.title}</b>
-                  <span className={`text-xs px-2 py-1 rounded ${
-                    m.status === "completed" ? "bg-green-100" : m.status === "in_progress" ? "bg-blue-100" : "bg-yellow-100"
-                  }`}>{m.status}</span>
-                </div>
-                <p className="text-sm text-gray-600 mt-1">{m.description}</p>
-                <p className="text-xs text-gray-400 mt-1">
-                  Priority: {m.priority} • Reported by: {emailOf(m.reporter_user_id)}
-                </p>
-                {(m.issue_photos || []).length > 0 && (
-                  <div className="flex gap-2 mt-2">
-                    {m.issue_photos.map((ph: string, i: number) => (
-                      <a key={i} href={ph} target="_blank" className="text-indigo-600 text-xs underline">
-                        Photo {i + 1}
-                      </a>
-                    ))}
+            {data.maintenance.map((m: any) => {
+              const assignedVendor = data.members.find((member: any) => member.user_id === m.assigned_vendor_user_id);
+              return (
+                <div key={m.id} className="bg-white p-6 rounded-xl">
+                  <div className="flex justify-between">
+                    <b>{m.title}</b>
+                    <span className={`text-xs px-2 py-1 rounded ${
+                      m.status === "completed" ? "bg-green-100" : m.status === "in_progress" ? "bg-blue-100" : "bg-yellow-100"
+                    }`}>{m.status}</span>
                   </div>
-                )}
-                <div className="flex gap-2 mt-3">
-                  {m.status !== "in_progress" && m.status !== "completed" && (
-                    <button onClick={() => setMaintenanceStatus(m.id, "in_progress")}
-                      className="px-3 py-1 bg-blue-600 text-white rounded text-sm">Start Work</button>
+                  <p className="text-sm text-gray-600 mt-1">{m.description}</p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Priority: {m.priority} • Reported by: {emailOf(m.reporter_user_id)}
+                    {assignedVendor && <> • <b>Assigned: {assignedVendor.profiles?.full_name || assignedVendor.profiles?.email}</b></>}
+                  </p>
+                  {/* Issue Photos */}
+                  {(m.issue_photos || []).length > 0 && (
+                    <div className="flex gap-2 mt-2">
+                      {m.issue_photos.map((ph: string, i: number) => (
+                        <a key={i} href={ph} target="_blank" className="text-indigo-600 text-xs underline">
+                          Photo {i + 1}
+                        </a>
+                      ))}
+                    </div>
                   )}
-                  {m.status !== "completed" && (
-                    <button onClick={() => setMaintenanceStatus(m.id, "completed")}
-                      className="px-3 py-1 bg-green-600 text-white rounded text-sm">Mark Completed</button>
+                  {/* NEW: Completion Photos */}
+                  {(m.completed_photos || []).length > 0 && (
+                    <div className="flex gap-2 mt-2">
+                      {m.completed_photos.map((ph: string, i: number) => (
+                        <a key={i} href={ph} target="_blank" className="text-green-600 text-xs underline">
+                          Done {i + 1}
+                        </a>
+                      ))}
+                    </div>
                   )}
+                  {/* NEW: Completion timestamp */}
+                  {m.completed_at && (
+                    <div className="text-xs text-green-600 mt-1">
+                      ✅ Completed: {new Date(m.completed_at).toLocaleString()}
+                    </div>
+                  )}
+                  <div className="flex gap-2 mt-3">
+                    {m.status !== "in_progress" && m.status !== "completed" && (
+                      <button onClick={() => setMaintenanceStatus(m.id, "in_progress")}
+                        className="px-3 py-1 bg-blue-600 text-white rounded text-sm">Start Work</button>
+                    )}
+                    {m.status !== "completed" && (
+                      <button onClick={() => setMaintenanceStatus(m.id, "completed")}
+                        className="px-3 py-1 bg-green-600 text-white rounded text-sm">Mark Completed</button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {data.maintenance.length === 0 && <p className="text-gray-400">No maintenance requests.</p>}
           </div>
         </div>
