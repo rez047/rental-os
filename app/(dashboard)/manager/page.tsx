@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase";
-import { generateRentSchedule, saveSignature, askAI, createMaintenanceRequest } from "@/lib/actions";
+import { generateRentSchedule, saveSignature, askAI, createMaintenanceRequest, evictTenant } from "@/lib/actions";
 import SignaturePad from "@/components/SignaturePad";
 import PropertyAccess from "@/components/PropertyAccess";
 import FileUploader from "@/components/FileUploader";
@@ -33,6 +33,10 @@ function ManagerDashboard() {
   
   const [maintenancePhotos, setMaintenancePhotos] = useState<any[]>([]);
   const [maintenanceVideos, setMaintenanceVideos] = useState<any[]>([]);
+
+  // NEW: Eviction state
+  const [evictModal, setEvictModal] = useState<{ leaseId: string; tenantEmail: string } | null>(null);
+  const [evictionReason, setEvictionReason] = useState("");
 
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
@@ -134,7 +138,6 @@ function ManagerDashboard() {
     const startDate = fd.get("start_date") as string;
     const endDate = leaseType === "indefinite" ? "2099-12-31" : fd.get("end_date") as string;
 
-    // FIXED: Get property_id from the selected unit
     const unitId = fd.get("unit_id") as string;
     const unit = data.units.find((u: any) => u.id === unitId);
 
@@ -184,7 +187,6 @@ function ManagerDashboard() {
     load();
   }
 
-  // FIXED: Now includes caretaker assignment
   async function submitMaintenance(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
@@ -203,6 +205,16 @@ function ManagerDashboard() {
     (e.target as HTMLFormElement).reset();
     load();
     alert("Task created!");
+  }
+
+  // NEW: Eviction handler
+  async function handleEvict() {
+    if (!evictModal) return;
+    await evictTenant(evictModal.leaseId, evictionReason);
+    setEvictModal(null);
+    setEvictionReason("");
+    load();
+    alert("Tenant has been evicted");
   }
 
   const tenants = data.members.filter((m: any) => m.role === "tenant");
@@ -352,7 +364,7 @@ function ManagerDashboard() {
               <option value="indefinite">Indefinite</option>
             </select>
             <input name="start_date" type="date" required className="p-2 border rounded" />
-            <input name="end_date" type="date" className="p-2 border rounded" placeholder="End date (fixed only)" />
+            <input name="end_date" type="date" className="p-2 border rounded" />
             <input name="monthly_rent" type="number" placeholder="Monthly rent" readOnly value={selectedUnit?.monthly_rent || ""} required className="p-2 border rounded bg-gray-50" />
             <input name="security_deposit" type="number" placeholder="Deposit" readOnly value={selectedUnit?.security_deposit || 0} className="p-2 border rounded bg-gray-50" />
             <button className="col-span-3 px-4 py-2 bg-indigo-600 text-white rounded-lg">
@@ -370,15 +382,32 @@ function ManagerDashboard() {
                 <p className="text-sm text-gray-600">
                   {l.start_date} → {l.lease_type === "indefinite" ? "Indefinite" : l.end_date} • ${l.monthly_rent}/mo • Deposit ${l.security_deposit}
                 </p>
+                {l.evicted && (
+                  <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                    ⚠️ Evicted{l.eviction_reason && <> — Reason: {l.eviction_reason}</>}
+                    {l.eviction_date && <> on {new Date(l.eviction_date).toLocaleDateString()}</>}
+                  </div>
+                )}
                 <div className="flex gap-4 mt-2 text-sm">
                   <span>{l.signed_by_tenant ? "✅ Tenant signed" : "⏳ Tenant signature pending"}</span>
                   <span>{l.signed_by_manager ? "✅ Manager signed" : "⏳ Manager signature pending"}</span>
                 </div>
-                {!l.signed_by_manager && (
-                  <div className="mt-3 max-w-md">
-                    <SignaturePad leaseId={l.id} role="manager" onSigned={load} />
-                  </div>
-                )}
+                <div className="flex gap-2 mt-3 flex-wrap">
+                  {!l.signed_by_manager && (
+                    <div className="max-w-md">
+                      <SignaturePad leaseId={l.id} role="manager" onSigned={load} />
+                    </div>
+                  )}
+                  {/* NEW: Evict button */}
+                  {!l.evicted && l.status === "active" && (
+                    <button 
+                      onClick={() => setEvictModal({ leaseId: l.id, tenantEmail: emailOf(l.tenant_user_id) })}
+                      className="px-3 py-1 bg-red-600 text-white rounded text-sm"
+                    >
+                      Evict Tenant
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -428,7 +457,6 @@ function ManagerDashboard() {
 
       {tab === "maintenance" && (
         <div className="space-y-6">
-          {/* FIXED: Includes caretaker assignment */}
           <form onSubmit={submitMaintenance} className="bg-white p-6 rounded-xl">
             <h3 className="font-semibold mb-4">Create Task / Assign to Caretaker</h3>
             <div className="grid grid-cols-2 gap-3 mb-3">
@@ -449,8 +477,8 @@ function ManagerDashboard() {
                 </option>
               ))}
             </select>
-            <input name="title" placeholder="Task title (e.g. Fix broken window)" required className="w-full p-2 border rounded mb-2" />
-            <textarea name="description" placeholder="Describe the task in detail" rows={3} required className="w-full p-2 border rounded mb-2" />
+            <input name="title" placeholder="Task title" required className="w-full p-2 border rounded mb-2" />
+            <textarea name="description" placeholder="Describe the task" rows={3} required className="w-full p-2 border rounded mb-2" />
             <select name="priority" required className="w-full p-2 border rounded mb-3">
               <option value="low">Low Priority</option>
               <option value="medium">Medium Priority</option>
@@ -486,7 +514,6 @@ function ManagerDashboard() {
             <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Create Task</button>
           </form>
 
-          {/* All Tasks & Tenant Requests */}
           <div className="space-y-3">
             <h3 className="font-semibold text-lg">All Tasks & Requests</h3>
             {data.maintenance.map((m: any) => {
@@ -594,6 +621,39 @@ function ManagerDashboard() {
               {aiBusy ? "Thinking…" : "Send"}
             </button>
           </form>
+        </div>
+      )}
+
+      {/* NEW: Eviction Modal */}
+      {evictModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-xl max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold mb-4">Evict Tenant</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              You are about to evict <b>{evictModal.tenantEmail}</b>. This will terminate their lease.
+            </p>
+            <textarea
+              value={evictionReason}
+              onChange={(e) => setEvictionReason(e.target.value)}
+              placeholder="Reason for eviction (optional)"
+              rows={3}
+              className="w-full p-2 border rounded mb-4"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={handleEvict}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded"
+              >
+                Confirm Eviction
+              </button>
+              <button
+                onClick={() => { setEvictModal(null); setEvictionReason(""); }}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
