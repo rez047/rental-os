@@ -1,7 +1,6 @@
 import { createServerSupabase as createClient } from "@/lib/supabase-server";
 import { redirect } from "next/navigation";
-import Link from "next/link";
-import { signOut } from "@/lib/actions";
+import DashboardSidebar from "@/components/DashboardSidebar";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = createClient();
@@ -58,25 +57,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   return (
     <div className="flex min-h-screen bg-gray-50">
-      <aside className="w-64 bg-white border-r p-6">
-        <div className="font-bold text-xl mb-2">RentOS</div>
-        <div className="text-sm text-gray-500 mb-6">{org.name}</div>
-        <nav className="space-y-1">
-          {navItems[role]?.map(item => (
-            <Link key={item.href} href={item.href}
-              className="block px-4 py-2 rounded-lg hover:bg-gray-100 text-sm">
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-        <div className="mt-8 pt-6 border-t">
-          <div className="text-sm mb-1">{user.email}</div>
-          <div className="text-xs text-gray-500 mb-3 capitalize">{role.replace("_", " ")}</div>
-          <form action={async () => { "use server"; await signOut(); redirect("/login"); }}>
-            <button className="text-sm text-red-600">Sign out</button>
-          </form>
-        </div>
-      </aside>
+      <DashboardSidebar
+        role={role}
+        orgName={org.name}
+        userEmail={user.email}
+        navItems={navItems[role] || []}
+      />
       <main className="flex-1 p-8 overflow-auto">{children}</main>
     </div>
   );
