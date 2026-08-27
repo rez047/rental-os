@@ -388,7 +388,7 @@ export async function createMaintenanceRequest(data: {
 }
 
 // NEW: Add completion photo from caretaker
-export async function addCompletedPhoto(requestId: string, file: string) {
+export async function addCompletedPhoto(requestId: string, file: any) {
   const supabase = createClient();
   const { data: existing } = await supabase.from("maintenance_requests").select("completed_photos").eq("id", requestId).single();
   const photos = [...(existing.completed_photos || []), file];
