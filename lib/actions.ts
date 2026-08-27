@@ -425,7 +425,8 @@ export async function createMaintenanceRequest(data: {
   });
 }
 
-export async function addMaintenancePhoto(requestId: string, file: File) {
+export async function addMaintenancePhoto(requestId: string, formData: FormData) {
+  const file = formData.get("file") as File;
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const { path, signedUrl } = await uploadPrivateFile(user!.id, "maintenance", file);
