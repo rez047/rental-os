@@ -161,6 +161,30 @@ function ManagerDashboard() {
     setSelectedUnit(null);
   }
 
+  // NEW: Quick assign tenant directly from the unit card
+  async function quickAssignTenant(unitId: string, propertyId: string, monthlyRent: number, tenantUserId: string) {
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data: membership } = await supabase.from("org_members").select("org_id").eq("user_id", user!.id).single();
+    
+    const { data: lease, error } = await supabase.from("leases").insert({
+      org_id: membership.org_id,
+      unit_id: unitId,
+      tenant_user_id: tenantUserId,
+      start_date: new Date().toISOString().split('T')[0],
+      end_date: "2099-12-31",
+      monthly_rent: monthlyRent,
+      security_deposit: 0,
+      lease_type: "indefinite",
+      status: "active"
+    }).select().single();
+
+    if (error) alert("Error assigning tenant: " + error.message);
+    else {
+      alert("Tenant assigned successfully!");
+      load();
+    }
+  }
+
   async function setMaintenanceStatus(id: string, status: string) {
     await supabase.from("maintenance_requests").update({ 
       status,
@@ -179,7 +203,6 @@ function ManagerDashboard() {
     load();
   }
 
-  // UPDATED: Now supports caretaker assignment
   async function submitMaintenance(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
@@ -278,13 +301,35 @@ function ManagerDashboard() {
                   </span>
                 </div>
                 <p className="text-sm text-gray-500 mb-3">{p.address}</p>
-                <div className="space-y-1 mb-2">
-                  {(p.units || []).map((u: any) => (
-                    <div key={u.id} className="flex justify-between text-sm bg-gray-50 rounded px-2 py-1">
-                      <span>{u.name}</span>
-                      <span>${u.monthly_rent}/mo {occupiedUnitIds.includes(u.id) ? "• Occupied" : "• Vacant"}</span>
-                    </div>
-                  ))}
+                <div className="space-y-2 mb-2">
+                  {(p.units || []).map((u: any) => {
+                    const unitLease = data.leases.find((l: any) => l.unit_id === u.id && l.status === "active");
+                    return (
+                      <div key={u.id} className="bg-gray-50 rounded px-3 py-2">
+                        <div className="flex justify-between text-sm">
+                          <span className="font-semibold">{u.name}</span>
+                          <span>${u.monthly_rent}/mo</span>
+                        </div>
+                        {unitLease ? (
+                          <div className="text-xs text-green-600 mt-1 font-medium">
+                            ✅ Occupied by: {emailOf(unitLease.tenant_user_id)}
+                          </div>
+                        ) : (
+                          <form onSubmit={async (e) => {
+                            e.preventDefault();
+                            const fd = new FormData(e.currentTarget);
+                            await quickAssignTenant(u.id, u.property_id, u.monthly_rent, fd.get("tenant_user_id") as string);
+                          }} className="flex gap-2 mt-2 items-center">
+                            <select name="tenant_user_id" required className="flex-1 p-1.5 border rounded text-xs bg-white">
+                              <option value="">Assign tenant to this unit...</option>
+                              {tenants.map((m: any) => <option key={m.user_id} value={m.user_id}>{m.profiles?.email}</option>)}
+                            </select>
+                            <button className="px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-semibold whitespace-nowrap">Assign</button>
+                          </form>
+                        )}
+                      </div>
+                    );
+                  })}
                   {(p.units || []).length === 0 && <p className="text-sm text-gray-400">No units yet</p>}
                 </div>
                 <PropertyAccess propertyId={p.id} caretakerUserId={p.caretaker_user_id} />
@@ -315,7 +360,7 @@ function ManagerDashboard() {
               })}
             </tbody>
           </table>
-          <p className="text-xs text-gray-400 mt-3">Invite tenants from Admin Panel → Team.</p>
+          <p className="text-xs text-gray-400 mt-3">Invite tenants from Admin Panel → Team, then assign them to a unit in the Properties tab.</p>
         </div>
       )}
 
@@ -412,7 +457,6 @@ function ManagerDashboard() {
 
       {tab === "maintenance" && (
         <div className="space-y-6">
-          {/* UPDATED: Now supports caretaker assignment */}
           <form onSubmit={submitMaintenance} className="bg-white p-6 rounded-xl">
             <h3 className="font-semibold mb-4">Create Task / Request</h3>
             <div className="grid grid-cols-2 gap-3 mb-3">
@@ -425,7 +469,6 @@ function ManagerDashboard() {
                 {data.units.map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
               </select>
             </div>
-            {/* NEW: Caretaker assignment dropdown */}
             <select name="assigned_vendor_user_id" className="w-full p-2 border rounded mb-3">
               <option value="">Assign to Caretaker (optional)…</option>
               {caretakers.map((v: any) => (
@@ -487,7 +530,6 @@ function ManagerDashboard() {
                     Priority: {m.priority} • Reported by: {emailOf(m.reporter_user_id)}
                     {assignedVendor && <> • <b>Assigned: {assignedVendor.profiles?.full_name || assignedVendor.profiles?.email}</b></>}
                   </p>
-                  {/* Issue Photos */}
                   {(m.issue_photos || []).length > 0 && (
                     <div className="flex gap-2 mt-2">
                       {m.issue_photos.map((ph: string, i: number) => (
@@ -497,7 +539,6 @@ function ManagerDashboard() {
                       ))}
                     </div>
                   )}
-                  {/* NEW: Completion Photos */}
                   {(m.completed_photos || []).length > 0 && (
                     <div className="flex gap-2 mt-2">
                       {m.completed_photos.map((ph: string, i: number) => (
@@ -507,7 +548,6 @@ function ManagerDashboard() {
                       ))}
                     </div>
                   )}
-                  {/* NEW: Completion timestamp */}
                   {m.completed_at && (
                     <div className="text-xs text-green-600 mt-1">
                       ✅ Completed: {new Date(m.completed_at).toLocaleString()}
