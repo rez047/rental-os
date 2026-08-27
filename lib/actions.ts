@@ -357,9 +357,16 @@ export async function removeCoOwner(propertyId: string, userId: string) {
 }
 
 
+// UPDATED: Now supports assignedVendorUserId (caretaker assignment)
 export async function createMaintenanceRequest(data: {
-  unitId: string; propertyId: string; title: string; description: string; priority: string;
-  issuePhotos?: string[]; issueVideos?: string[];
+  unitId: string | null; 
+  propertyId: string; 
+  title: string; 
+  description: string; 
+  priority: string;
+  assignedVendorUserId?: string;
+  issuePhotos?: any[]; 
+  issueVideos?: any[];
 }) {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -370,14 +377,33 @@ export async function createMaintenanceRequest(data: {
     unit_id: data.unitId,
     property_id: data.propertyId,
     reporter_user_id: user!.id,
+    assigned_vendor_user_id: data.assignedVendorUserId || null,
     title: data.title,
     description: data.description,
     priority: data.priority,
     issue_photos: data.issuePhotos || [],
-    issue_videos: data.issueVideos || []
+    issue_videos: data.issueVideos || [],
+    status: "open"
   });
 }
 
+// NEW: Add completion photo from caretaker
+export async function addCompletedPhoto(requestId: string, file: string) {
+  const supabase = createClient();
+  const { data: existing } = await supabase.from("maintenance_requests").select("completed_photos").eq("id", requestId).single();
+  const photos = [...(existing.completed_photos || []), file];
+  await supabase.from("maintenance_requests").update({ completed_photos: photos }).eq("id", requestId);
+}
+
+// NEW: Update status with completion timestamp
+export async function updateMaintenanceStatus(id: string, status: string) {
+  const supabase = createClient();
+  const update: any = { status };
+  if (status === "completed") {
+    update.completed_at = new Date().toISOString();
+  }
+  await supabase.from("maintenance_requests").update(update).eq("id", id);
+}
 
 
 export async function handleSignOut() {
