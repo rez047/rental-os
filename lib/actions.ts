@@ -371,3 +371,25 @@ export async function removeCoOwner(propertyId: string, userId: string) {
 
   await admin.from("property_owners").delete().eq("property_id", propertyId).eq("user_id", userId);
 }
+
+
+export async function createMaintenanceRequest(data: {
+  unitId: string; propertyId: string; title: string; description: string; priority: string;
+  issuePhotos?: string[]; issueVideos?: string[];
+}) {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const orgId = await getActiveOrgId();
+
+  await supabase.from("maintenance_requests").insert({
+    org_id: orgId,
+    unit_id: data.unitId,
+    property_id: data.propertyId,
+    reporter_user_id: user!.id,
+    title: data.title,
+    description: data.description,
+    priority: data.priority,
+    issue_photos: data.issuePhotos || [],
+    issue_videos: data.issueVideos || []
+  });
+}
