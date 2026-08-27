@@ -1,25 +1,33 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import {
   createMaintenanceRequest, addMaintenancePhoto, saveMoveInCondition,
-  initiateMpesaPayment, sendMessage, getMessages, getSignedUrl, uploadLeaseMedia
+  initiateMpesaPayment, getSignedUrl, uploadLeaseMedia
 } from "@/lib/actions";
 import SignaturePad from "@/components/SignaturePad";
 import FileUploader from "@/components/FileUploader";
+import MessagesPanel from "@/components/MessagesPanel";
 
 export default function TenantPortal() {
+  return (
+    <Suspense fallback={<div className="p-8">Loading...</div>}>
+      <TenantDashboard />
+    </Suspense>
+  );
+}
+
+function TenantDashboard() {
   const supabase = createClient();
-  const [data, setData] = useState<any>({ leases: [], charges: [], payments: [], maintenance: [], messages: [], profiles: [] });
-  const [tab, setTab] = useState("home");
+  const params = useSearchParams();
+  const [tab, setTab] = useState(params.get("tab") || "home");
+  const [data, setData] = useState<any>({ leases: [], charges: [], payments: [], maintenance: [], evictedLease: null });
   const [selectedLeaseId, setSelectedLeaseId] = useState("");
   const [mpesaPhone, setMpesaPhone] = useState("");
-  const [messageText, setMessageText] = useState("");
-  const [userId, setUserId] = useState("");
 
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
-    setUserId(user!.id);
 
     const { data: leases } = await supabase
       .from("leases")
@@ -27,14 +35,14 @@ export default function TenantPortal() {
       .eq("tenant_user_id", user!.id)
       .order("start_date", { ascending: false });
 
-    const activeLeases = (leases || []).filter((l: any) => l.status === "active");
+    const all = leases || [];
+    const activeLeases = all.filter((l: any) => l.status === "active");
+    const evictedLease = all.find((l: any) => l.evicted) || null;
 
-    const [charges, payments, maintenance, messages, profiles] = await Promise.all([
+    const [charges, payments, maintenance] = await Promise.all([
       supabase.from("rent_charges").select("*").eq("tenant_user_id", user!.id).order("due_date"),
       supabase.from("payments").select("*").eq("payer_user_id", user!.id).order("created_at", { ascending: false }),
-      supabase.from("maintenance_requests").select("*").eq("reporter_user_id", user!.id),
-      getMessages(),
-      supabase.from("profiles").select("id, email, full_name")
+      supabase.from("maintenance_requests").select("*").eq("reporter_user_id", user!.id)
     ]);
 
     setData({
@@ -42,8 +50,7 @@ export default function TenantPortal() {
       charges: charges.data || [],
       payments: payments.data || [],
       maintenance: maintenance.data || [],
-      messages: messages || [],
-      profiles: profiles.data || []
+      evictedLease
     });
 
     if (!selectedLeaseId && activeLeases.length > 0) {
@@ -72,13 +79,6 @@ export default function TenantPortal() {
     setTimeout(load, 12000);
   }
 
-  async function handleSendMessage() {
-    if (!messageText.trim()) return;
-    await sendMessage(messageText);
-    setMessageText("");
-    load();
-  }
-
   const getPaymentStatus = (charge: any) => {
     if (charge.status === "paid") return { cls: "bg-green-100 text-green-700", label: "Paid" };
     const dueDate = new Date(charge.due_date);
@@ -89,13 +89,17 @@ export default function TenantPortal() {
     return { cls: "bg-yellow-100 text-yellow-700", label: "Upcoming" };
   };
 
-  const nameOf = (id: string) => {
-    const p = data.profiles.find((pr: any) => pr.id === id);
-    return p?.full_name || p?.email || "—";
-  };
-
   return (
     <div>
+      {/* Eviction banner */}
+      {data.evictedLease && (
+        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+          ⚠️ Your lease for <b>{data.evictedLease.properties?.name} • {data.evictedLease.units?.name}</b> has been terminated
+          {data.evictedLease.eviction_reason && <> — Reason: {data.evictedLease.eviction_reason}</>}
+          {data.evictedLease.eviction_date && <> on {new Date(data.evictedLease.eviction_date).toLocaleDateString()}</>}.
+        </div>
+      )}
+
       <div className="flex gap-2 mb-6 flex-wrap">
         {["home", "lease", "payments", "maintenance", "messages"].map(t => (
           <button key={t} onClick={() => setTab(t)}
@@ -150,7 +154,6 @@ export default function TenantPortal() {
 
       {tab === "payments" && (
         <div className="space-y-6">
-          {/* Lease selector */}
           <div className="bg-white p-6 rounded-xl">
             <h3 className="font-semibold mb-3">Select Lease / Unit</h3>
             <select value={selectedLeaseId} onChange={(e) => setSelectedLeaseId(e.target.value)}
@@ -178,7 +181,6 @@ export default function TenantPortal() {
                   className="w-full p-2 border rounded" />
               </div>
 
-              {/* Deposit */}
               {Number(selectedLease.security_deposit) > 0 && (
                 <div className="bg-white p-6 rounded-xl flex justify-between items-center">
                   <div>
@@ -196,7 +198,6 @@ export default function TenantPortal() {
                 </div>
               )}
 
-              {/* Rent charges for selected lease */}
               <div className="bg-white p-6 rounded-xl">
                 <h3 className="font-semibold mb-4">Rent Schedule — {selectedLease.units?.name}</h3>
                 {leaseCharges.length === 0 ? (
@@ -229,7 +230,6 @@ export default function TenantPortal() {
             </>
           )}
 
-          {/* Payment history (all leases) */}
           <div className="bg-white p-6 rounded-xl">
             <h3 className="font-semibold mb-4">Payment History</h3>
             {data.payments.length === 0 ? (
@@ -308,35 +308,11 @@ export default function TenantPortal() {
         </div>
       )}
 
-      {tab === "messages" && (
-        <div className="bg-white p-6 rounded-xl">
-          <h3 className="font-semibold mb-4">Messages</h3>
-          <div className="space-y-3 max-h-96 overflow-y-auto mb-4">
-            {data.messages.map((m: any) => (
-              <div key={m.id} className={`p-3 rounded-lg ${m.sender_user_id === userId ? "bg-indigo-50 ml-8" : "bg-gray-50 mr-8"}`}>
-                <div className="text-xs text-gray-500 mb-1">
-                  {nameOf(m.sender_user_id)} • {new Date(m.created_at).toLocaleString()}
-                </div>
-                <p className="text-sm">{m.content}</p>
-              </div>
-            ))}
-            {data.messages.length === 0 && (
-              <p className="text-gray-400 text-sm text-center">No messages yet. Start a conversation!</p>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <input value={messageText} onChange={(e) => setMessageText(e.target.value)}
-              placeholder="Type your message..." className="flex-1 p-2 border rounded"
-              onKeyDown={(e) => e.key === "Enter" && handleSendMessage()} />
-            <button onClick={handleSendMessage} className="px-4 py-2 bg-indigo-600 text-white rounded">Send</button>
-          </div>
-        </div>
-      )}
+      {tab === "messages" && <MessagesPanel />}
     </div>
   );
 }
 
-/* ---------- Lease card: info + signature + move-in media ---------- */
 function LeaseCard({ lease, onSigned }: any) {
   const isIndefinite = lease.lease_type === "indefinite";
   const hasMedia = (lease.move_in_photos || []).length > 0 || (lease.move_in_videos || []).length > 0;
@@ -356,7 +332,6 @@ function LeaseCard({ lease, onSigned }: any) {
         <p><b>Deposit:</b> ${lease.security_deposit}</p>
       </div>
 
-      {/* Signature — shown once, then locked with saved image */}
       <div className="pt-4 border-t">
         <h3 className="font-semibold mb-2">Tenant Signature</h3>
         {lease.signed_by_tenant ? (
@@ -371,7 +346,6 @@ function LeaseCard({ lease, onSigned }: any) {
         )}
       </div>
 
-      {/* Move-in condition */}
       <div className="pt-4 mt-4 border-t">
         <h3 className="font-semibold mb-2">Move-in Condition</h3>
         {hasMedia ? (
@@ -395,7 +369,6 @@ function LeaseCard({ lease, onSigned }: any) {
   );
 }
 
-/* ---------- Move-in upload form ---------- */
 function MoveInForm({ leaseId, onSaved }: any) {
   const [photos, setPhotos] = useState<string[]>([]);
   const [videos, setVideos] = useState<string[]>([]);
@@ -441,7 +414,6 @@ function MoveInForm({ leaseId, onSaved }: any) {
   );
 }
 
-/* ---------- Signed URL helpers ---------- */
 function SignedImage({ path }: { path: string }) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => { getSignedUrl(path).then(setUrl); }, [path]);
@@ -460,7 +432,6 @@ function SignedLink({ path, label, green }: { path: string; label: string; green
   );
 }
 
-/* ---------- Maintenance form ---------- */
 function MaintenanceForm({ unitId, propertyId, onCreated }: any) {
   const [photos, setPhotos] = useState<string[]>([]);
 
