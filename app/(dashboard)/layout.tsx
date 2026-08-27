@@ -40,10 +40,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
     ],
     manager: managerLinks,
     tenant: [
-      { label: "Home", href: "/tenant" },
-      { label: "My Lease", href: "/tenant?tab=lease" },
-      { label: "Payments", href: "/tenant?tab=payments" },
-      { label: "Maintenance", href: "/tenant?tab=maintenance" }
+      { label: "Home", href: "/tenants" },
+      { label: "My Lease", href: "/tenants?tab=lease" },
+      { label: "Payments", href: "/tenants?tab=payments" },
+      { label: "Maintenance", href: "/tenants?tab=maintenance" }
     ],
     owner: [
       { label: "Portfolio", href: "/owner" },
