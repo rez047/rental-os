@@ -226,13 +226,14 @@ export async function inviteMember(email: string, role: string) {
   const orgId = await getActiveOrgId();
   const admin = createServiceClient();
 
-  await admin.from("org_members").insert({
+  const { error: inviteError } = await admin.from("org_members").insert({
     org_id: orgId,
     user_id: null,
     role,
     status: "invited",
     invite_email: email.toLowerCase()
   });
+  if (inviteError) throw new Error("Invite failed: " + inviteError.message);
 
   const roleLabels: Record<string, string> = {
     tenant: "Tenant",
