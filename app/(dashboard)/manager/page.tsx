@@ -134,9 +134,14 @@ function ManagerDashboard() {
     const startDate = fd.get("start_date") as string;
     const endDate = leaseType === "indefinite" ? "2099-12-31" : fd.get("end_date") as string;
 
+    // FIXED: Get property_id from the selected unit
+    const unitId = fd.get("unit_id") as string;
+    const unit = data.units.find((u: any) => u.id === unitId);
+
     const { data: lease, error } = await supabase.from("leases").insert({
       org_id: membership.org_id,
-      unit_id: fd.get("unit_id") as string,
+      property_id: unit?.property_id || null,
+      unit_id: unitId,
       tenant_user_id: fd.get("tenant_user_id") as string,
       start_date: startDate,
       end_date: endDate,
@@ -161,30 +166,6 @@ function ManagerDashboard() {
     setSelectedUnit(null);
   }
 
-  // NEW: Quick assign tenant directly from the unit card
-  async function quickAssignTenant(unitId: string, propertyId: string, monthlyRent: number, tenantUserId: string) {
-    const { data: { user } } = await supabase.auth.getUser();
-    const { data: membership } = await supabase.from("org_members").select("org_id").eq("user_id", user!.id).single();
-    
-    const { data: lease, error } = await supabase.from("leases").insert({
-      org_id: membership.org_id,
-      unit_id: unitId,
-      tenant_user_id: tenantUserId,
-      start_date: new Date().toISOString().split('T')[0],
-      end_date: "2099-12-31",
-      monthly_rent: monthlyRent,
-      security_deposit: 0,
-      lease_type: "indefinite",
-      status: "active"
-    }).select().single();
-
-    if (error) alert("Error assigning tenant: " + error.message);
-    else {
-      alert("Tenant assigned successfully!");
-      load();
-    }
-  }
-
   async function setMaintenanceStatus(id: string, status: string) {
     await supabase.from("maintenance_requests").update({ 
       status,
@@ -203,6 +184,7 @@ function ManagerDashboard() {
     load();
   }
 
+  // FIXED: Now includes caretaker assignment
   async function submitMaintenance(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
@@ -301,35 +283,13 @@ function ManagerDashboard() {
                   </span>
                 </div>
                 <p className="text-sm text-gray-500 mb-3">{p.address}</p>
-                <div className="space-y-2 mb-2">
-                  {(p.units || []).map((u: any) => {
-                    const unitLease = data.leases.find((l: any) => l.unit_id === u.id && l.status === "active");
-                    return (
-                      <div key={u.id} className="bg-gray-50 rounded px-3 py-2">
-                        <div className="flex justify-between text-sm">
-                          <span className="font-semibold">{u.name}</span>
-                          <span>${u.monthly_rent}/mo</span>
-                        </div>
-                        {unitLease ? (
-                          <div className="text-xs text-green-600 mt-1 font-medium">
-                            ✅ Occupied by: {emailOf(unitLease.tenant_user_id)}
-                          </div>
-                        ) : (
-                          <form onSubmit={async (e) => {
-                            e.preventDefault();
-                            const fd = new FormData(e.currentTarget);
-                            await quickAssignTenant(u.id, u.property_id, u.monthly_rent, fd.get("tenant_user_id") as string);
-                          }} className="flex gap-2 mt-2 items-center">
-                            <select name="tenant_user_id" required className="flex-1 p-1.5 border rounded text-xs bg-white">
-                              <option value="">Assign tenant to this unit...</option>
-                              {tenants.map((m: any) => <option key={m.user_id} value={m.user_id}>{m.profiles?.email}</option>)}
-                            </select>
-                            <button className="px-3 py-1.5 bg-indigo-600 text-white rounded text-xs font-semibold whitespace-nowrap">Assign</button>
-                          </form>
-                        )}
-                      </div>
-                    );
-                  })}
+                <div className="space-y-1 mb-2">
+                  {(p.units || []).map((u: any) => (
+                    <div key={u.id} className="flex justify-between text-sm bg-gray-50 rounded px-2 py-1">
+                      <span>{u.name}</span>
+                      <span>${u.monthly_rent}/mo {occupiedUnitIds.includes(u.id) ? "• Occupied" : "• Vacant"}</span>
+                    </div>
+                  ))}
                   {(p.units || []).length === 0 && <p className="text-sm text-gray-400">No units yet</p>}
                 </div>
                 <PropertyAccess propertyId={p.id} caretakerUserId={p.caretaker_user_id} />
@@ -360,7 +320,7 @@ function ManagerDashboard() {
               })}
             </tbody>
           </table>
-          <p className="text-xs text-gray-400 mt-3">Invite tenants from Admin Panel → Team, then assign them to a unit in the Properties tab.</p>
+          <p className="text-xs text-gray-400 mt-3">Invite tenants from Admin Panel → Team.</p>
         </div>
       )}
 
@@ -370,18 +330,29 @@ function ManagerDashboard() {
             <h3 className="col-span-3 font-semibold">Create Lease</h3>
             <select name="tenant_user_id" required className="p-2 border rounded">
               <option value="">Tenant…</option>
-              {tenants.map((m: any) => <option key={m.user_id} value={m.user_id}>{m.profiles?.email}</option>)}
+              {tenants.map((m: any) => (
+                <option key={m.user_id} value={m.user_id}>
+                  {m.profiles?.full_name || m.profiles?.email}
+                </option>
+              ))}
             </select>
             <select name="unit_id" required className="p-2 border rounded" onChange={(e) => handleUnitSelect(e.target.value)}>
               <option value="">Unit…</option>
-              {data.units.map((u: any) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              {data.units.map((u: any) => {
+                const prop = data.properties.find((p: any) => p.id === u.property_id);
+                return (
+                  <option key={u.id} value={u.id}>
+                    {prop?.name} — {u.name} (${u.monthly_rent}/mo)
+                  </option>
+                );
+              })}
             </select>
             <select name="lease_type" required className="p-2 border rounded">
               <option value="fixed">Fixed Period</option>
               <option value="indefinite">Indefinite</option>
             </select>
             <input name="start_date" type="date" required className="p-2 border rounded" />
-            <input name="end_date" type="date" className="p-2 border rounded" />
+            <input name="end_date" type="date" className="p-2 border rounded" placeholder="End date (fixed only)" />
             <input name="monthly_rent" type="number" placeholder="Monthly rent" readOnly value={selectedUnit?.monthly_rent || ""} required className="p-2 border rounded bg-gray-50" />
             <input name="security_deposit" type="number" placeholder="Deposit" readOnly value={selectedUnit?.security_deposit || 0} className="p-2 border rounded bg-gray-50" />
             <button className="col-span-3 px-4 py-2 bg-indigo-600 text-white rounded-lg">
@@ -457,8 +428,9 @@ function ManagerDashboard() {
 
       {tab === "maintenance" && (
         <div className="space-y-6">
+          {/* FIXED: Includes caretaker assignment */}
           <form onSubmit={submitMaintenance} className="bg-white p-6 rounded-xl">
-            <h3 className="font-semibold mb-4">Create Task / Request</h3>
+            <h3 className="font-semibold mb-4">Create Task / Assign to Caretaker</h3>
             <div className="grid grid-cols-2 gap-3 mb-3">
               <select name="property_id" required className="p-2 border rounded">
                 <option value="">Property…</option>
@@ -477,8 +449,8 @@ function ManagerDashboard() {
                 </option>
               ))}
             </select>
-            <input name="title" placeholder="Task title" required className="w-full p-2 border rounded mb-2" />
-            <textarea name="description" placeholder="Describe the task" rows={3} required className="w-full p-2 border rounded mb-2" />
+            <input name="title" placeholder="Task title (e.g. Fix broken window)" required className="w-full p-2 border rounded mb-2" />
+            <textarea name="description" placeholder="Describe the task in detail" rows={3} required className="w-full p-2 border rounded mb-2" />
             <select name="priority" required className="w-full p-2 border rounded mb-3">
               <option value="low">Low Priority</option>
               <option value="medium">Medium Priority</option>
@@ -488,7 +460,7 @@ function ManagerDashboard() {
 
             <div className="space-y-3 mb-3">
               <div>
-                <div className="text-sm font-semibold mb-2">Reference Photos</div>
+                <div className="text-sm font-semibold mb-2">Reference Photos (optional)</div>
                 <FileUploader 
                   folder="maintenance" 
                   mode="image-video" 
@@ -514,7 +486,9 @@ function ManagerDashboard() {
             <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Create Task</button>
           </form>
 
+          {/* All Tasks & Tenant Requests */}
           <div className="space-y-3">
+            <h3 className="font-semibold text-lg">All Tasks & Requests</h3>
             {data.maintenance.map((m: any) => {
               const assignedVendor = data.members.find((member: any) => member.user_id === m.assigned_vendor_user_id);
               return (
@@ -531,21 +505,27 @@ function ManagerDashboard() {
                     {assignedVendor && <> • <b>Assigned: {assignedVendor.profiles?.full_name || assignedVendor.profiles?.email}</b></>}
                   </p>
                   {(m.issue_photos || []).length > 0 && (
-                    <div className="flex gap-2 mt-2">
-                      {m.issue_photos.map((ph: string, i: number) => (
-                        <a key={i} href={ph} target="_blank" className="text-indigo-600 text-xs underline">
-                          Photo {i + 1}
-                        </a>
-                      ))}
+                    <div className="mt-2">
+                      <div className="text-xs font-semibold text-gray-500 mb-1">ISSUE PHOTOS</div>
+                      <div className="flex gap-2 flex-wrap">
+                        {m.issue_photos.map((ph: any, i: number) => (
+                          <a key={i} href={typeof ph === "string" ? ph : ph?.signedUrl} target="_blank" className="text-indigo-600 text-xs underline">
+                            Photo {i + 1}
+                          </a>
+                        ))}
+                      </div>
                     </div>
                   )}
                   {(m.completed_photos || []).length > 0 && (
-                    <div className="flex gap-2 mt-2">
-                      {m.completed_photos.map((ph: string, i: number) => (
-                        <a key={i} href={ph} target="_blank" className="text-green-600 text-xs underline">
-                          Done {i + 1}
-                        </a>
-                      ))}
+                    <div className="mt-2">
+                      <div className="text-xs font-semibold text-green-600 mb-1">COMPLETION PHOTOS</div>
+                      <div className="flex gap-2 flex-wrap">
+                        {m.completed_photos.map((ph: any, i: number) => (
+                          <a key={i} href={typeof ph === "string" ? ph : ph?.signedUrl} target="_blank" className="text-green-600 text-xs underline">
+                            Done {i + 1}
+                          </a>
+                        ))}
+                      </div>
                     </div>
                   )}
                   {m.completed_at && (
